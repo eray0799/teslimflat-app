@@ -152,7 +152,7 @@ function DonutChart({ title, delivered, remaining, size = 180, stroke = 28 }) {
   );
 }
 
-/** ========== Şema: tip dönüştürme için ========== */
+/** ========== Şema: tip dönüştürme + kilit alanlar ========== */
 const SCHEMA_TYPES = {
   daire: "text",
   created_at: "timestamp",
@@ -173,14 +173,23 @@ const SCHEMA_TYPES = {
   teslim_durumu: "text",
   teslim_notu: "text",
   teslim_randevu_tarihi: "date",
-  demirbas: "text",
-  aidat: "numeric",
+  teslim_randevu_saati: "time",
+  demirbas: "numeric",        // TL — sabit (admin editleyemez)
+  aidat: "numeric",           // TL — sabit (admin editleyemez)
   demirbas_odeme_durumu: "text",
   kdv_muafiyeti: "text",
   ipotek_durumu: "text",
   tapu_durumu: "text",
-  teslim_randevu_saati: "time",
 };
+
+// Adminin değiştirebileceği alanların beyaz listesi
+const ALLOW_EDIT_FIELDS = new Set([
+  "teslim_randevu_tarihi",
+  "teslim_randevu_saati",
+  "teslim_durumu",
+  "teslim_notu",
+  "demirbas_odeme_durumu",
+]);
 
 function coerceValue(field, value) {
   const t = SCHEMA_TYPES[field] || "text";
@@ -191,7 +200,7 @@ function coerceValue(field, value) {
       return Number.isNaN(n) ? null : n;
     }
     case "numeric": {
-      const n = parseFloat(String(value).replace(",", "."));
+      const n = parseFloat(String(value).replace(/\./g, "").replace(",", ".")); // 1.234,56 → 1234.56
       return Number.isNaN(n) ? null : n;
     }
     case "date":
@@ -238,8 +247,7 @@ export default function App() {
     () => window.localStorage.getItem("tp_admin") === "1"
   );
 
-  // Inline edit
-  const [editMode, setEditMode] = useState(false);
+  // Inline edit state (admin doğrudan yazar)
   const [edit, setEdit] = useState({});
   const pkRef = useMemo(() => (selected ? selected.daire : null), [selected]);
 
@@ -278,6 +286,7 @@ export default function App() {
       if (selected) {
         const again = data.find((r) => r.daire === selected.daire);
         setSelected(again || null);
+        setEdit(again ? { ...again } : {});
       }
     } catch (e) {
       console.error(e);
@@ -406,10 +415,8 @@ export default function App() {
   useEffect(() => {
     if (selected) {
       setEdit({ ...selected });
-      setEditMode(false);
     } else {
       setEdit({});
-      setEditMode(false);
     }
   }, [selected]);
 
@@ -417,12 +424,23 @@ export default function App() {
     setEdit((prev) => ({ ...prev, [field]: value }));
   }
 
+  function isLocked(field) {
+    if (field === "created_at") return true;
+    if (!isAdmin) return true;
+    return !ALLOW_EDIT_FIELDS.has(field);
+  }
+
   async function handleSave() {
     if (!isAdmin || !selected) return;
     const original = selected;
     const changed = {};
+
     Object.keys(SCHEMA_TYPES).forEach((k) => {
       if (!(k in original) && !(k in edit)) return;
+
+      // Kilitli alanlar admin tarafından değiştirilemez → atla
+      if (isLocked(k)) return;
+
       const origVal = original[k] ?? null;
       const newValRaw = edit[k] ?? null;
       const newVal = coerceValue(k, newValRaw);
@@ -432,8 +450,7 @@ export default function App() {
     });
 
     if (Object.keys(changed).length === 0) {
-      setEditMode(false);
-      return;
+      return; // değişiklik yok
     }
 
     try {
@@ -443,7 +460,6 @@ export default function App() {
       const newKey = changed.daire ?? daireKey;
       const updated = rows.find((r) => r.daire === newKey) || null;
       setSelected(updated);
-      setEditMode(false);
     } catch (e) {
       console.error(e);
       alert("Kaydetme başarısız: " + e.message);
@@ -452,7 +468,6 @@ export default function App() {
 
   function handleCancel() {
     setEdit({ ...selected });
-    setEditMode(false);
   }
 
   /** ========== UI ========== */
@@ -591,6 +606,12 @@ export default function App() {
                                 </div>
                                 <div className="small text-muted">
                                   {(r.musteri || r.mal_sahibi || "-")} • {(r.teslim_durumu || "Durum Yok")}
+                                  {/* YENİ: demirbaş ödeme durumu sadece Teslim Edildi ise göster */}
+                                  {isDelivered(r) && r.demirbas_odeme_durumu ? (
+                                    <span className={`badge ms-2 ${r.demirbas_odeme_durumu.toLowerCase().includes("öden") ? "bg-success" : "bg-warning text-dark"}`}>
+                                      Demirbaş: {r.demirbas_odeme_durumu}
+                                    </span>
+                                  ) : null}
                                 </div>
                               </div>
                             ))}
@@ -615,24 +636,6 @@ export default function App() {
                     >
                       Teslim Edildi Yap
                     </button>
-                    {editMode ? (
-                      <>
-                        <button className="btn btn-sm btn-primary" onClick={handleSave} disabled={!isAdmin || !selected}>
-                          Kaydet
-                        </button>
-                        <button className="btn btn-sm btn-outline-secondary" onClick={handleCancel}>
-                          Vazgeç
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        className="btn btn-sm btn-outline-primary"
-                        onClick={() => (isAdmin ? setEditMode(true) : alert("Düzenlemek için giriş yapın."))}
-                        disabled={!selected}
-                      >
-                        Düzenle
-                      </button>
-                    )}
                   </span>
                 </h2>
 
@@ -642,37 +645,44 @@ export default function App() {
                   <div className="table-responsive">
                     <table className="table table-sm align-middle">
                       <tbody>
-                        {renderRow("Daire", "daire", editMode, edit, onEditChange)}
-                        {renderRowTriple("Blok / No / Kat", ["blok","no","kat"], editMode, edit, onEditChange)}
-                        {renderRow("Tip / Cephe", null, editMode, edit, onEditChange, [
-                          ["tip","text"], ["cephe","text"]
-                        ])}
-                        {renderRow("Metrekare (Genel/Brüt/Net)", null, editMode, edit, onEditChange, [
-                          ["genel_brut","numeric"], ["brut","numeric"], ["net","numeric"]
-                        ])}
-                        {renderRow("Mal Sahibi / Müşteri", null, editMode, edit, onEditChange, [
-                          ["mal_sahibi","text"], ["musteri","text"]
-                        ])}
-                        {renderRow("Acenta", "acenta", editMode, edit, onEditChange)}
-                        {renderRow("Teslim Durumu", "teslim_durumu", editMode, edit, onEditChange)}
-                        {renderRow("Not", "teslim_notu", editMode, edit, onEditChange)}
-                        {renderRow("Randevu Tarihi / Saati", null, editMode, edit, onEditChange, [
+                        {/* BAŞLIK: Daire adı belirgin */}
+                        <tr>
+                          <th colSpan={2}>
+                            <div className="fs-5 fw-bold text-primary">
+                              {selected.daire || `${selected.blok}-${selected.no}`}
+                            </div>
+                          </th>
+                        </tr>
+
+                        {/* 1) Randevu Tarihi / Saati + Kaydet/Vazgeç */}
+                        {renderRow("Randevu Tarihi / Saati", null, edit, onEditChange, [
                           ["teslim_randevu_tarihi","date"], ["teslim_randevu_saati","time"]
                         ])}
-                        {renderRow("Demirbaş", "demirbas", editMode, edit, onEditChange)}
-                        {renderRow("Aidat", "aidat", editMode, edit, onEditChange, null, "numeric")}
+                        {isAdmin && selected ? (
+                          <tr>
+                            <th></th>
+                            <td className="d-flex justify-content-end">
+                              <div className="btn-group btn-group-sm">
+                                <button className="btn btn-primary" onClick={handleSave}>Kaydet</button>
+                                <button className="btn btn-outline-secondary" onClick={handleCancel}>Vazgeç</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ) : null}
 
-                        {/* Demirbaş ödeme + toggle */}
+                        {/* 2) Teslim Durumu */}
+                        {renderRow("Teslim Durumu", "teslim_durumu", edit, onEditChange)}
+                        {/* 3) Not */}
+                        {renderRow("Not", "teslim_notu", edit, onEditChange)}
+                        {/* 4) Demirbaş (TL) */}
+                        {renderRowLocked("Demirbaş", "demirbas", edit)}
+                        {/* 5) Aidat (TL) */}
+                        {renderRowLocked("Aidat", "aidat", edit)}
+                        {/* 6) Demirbaş Ödeme */}
                         <tr>
                           <th>Demirbaş Ödeme</th>
-                          <td className="d-flex align-items-center gap-2">
-                            {editMode ? (
-                              inputFor("demirbas_odeme_durumu", edit, onEditChange, "text")
-                            ) : (
-                              <span className={`badge ${(selected.demirbas_odeme_durumu || "").toLowerCase().includes("öden") ? "bg-success" : "bg-warning text-dark"}`}>
-                                {selected.demirbas_odeme_durumu || "Bilinmiyor"}
-                              </span>
-                            )}
+                          <td className="d-flex align-items-center gap-2 flex-wrap">
+                            {inputFor("demirbas_odeme_durumu", edit, onEditChange, "text", isLocked("demirbas_odeme_durumu"))}
                             <button
                               className="btn btn-sm btn-outline-secondary"
                               onClick={() => toggleDemirbasOdeme(selected)}
@@ -684,52 +694,35 @@ export default function App() {
                           </td>
                         </tr>
 
-                        {/* KDV / İpotek / Tapu: özel seçiciler + normalize görüntü */}
+                        {/* DİĞER BİLGİLER (daha aşağıda) */}
+                        {renderRowTripleLocked("Blok / No / Kat", ["blok","no","kat"], edit)}
+                        {renderRowLocked("Tip / Cephe", null, edit, [
+                          ["tip","text"], ["cephe","text"]
+                        ])}
+                        {renderRowLocked("Metrekare (Genel/Brüt/Net)", null, edit, [
+                          ["genel_brut","numeric"], ["brut","numeric"], ["net","numeric"]
+                        ])}
+                        {renderRowLocked("Mal Sahibi / Müşteri", null, edit, [
+                          ["mal_sahibi","text"], ["musteri","text"]
+                        ])}
+                        {renderRowLocked("Acenta", "acenta", edit)}
+
+                        {/* KDV / İpotek / Tapu — kilitli */}
                         <tr>
                           <th>KDV / İpotek / Tapu</th>
                           <td>
-                            {editMode ? (
-                              <div className="d-flex gap-2 flex-wrap">
-                                <div className="d-flex align-items-center gap-2">
-                                  <span className="small text-muted" style={{minWidth:110}}>KDV Muafiyeti</span>
-                                  {selectVarYok("kdv_muafiyeti", edit, onEditChange)}
-                                </div>
-                                <div className="d-flex align-items-center gap-2">
-                                  <span className="small text-muted" style={{minWidth:110}}>İpotek Durumu</span>
-                                  {selectVarYok("ipotek_durumu", edit, onEditChange)}
-                                </div>
-                                <div className="d-flex align-items-center gap-2">
-                                  <span className="small text-muted" style={{minWidth:110}}>Tapu Durumu</span>
-                                  {selectTapu("tapu_durumu", edit, onEditChange)}
-                                </div>
-                              </div>
-                            ) : (
-                              <span>
-                                {normVarYok(selected.kdv_muafiyeti)} / {normVarYok(selected.ipotek_durumu)} / {normTapu(selected.tapu_durumu)}
-                              </span>
-                            )}
+                            <span>
+                              {normVarYok(selected.kdv_muafiyeti)} / {normVarYok(selected.ipotek_durumu)} / {normTapu(selected.tapu_durumu)}
+                            </span>
                           </td>
                         </tr>
 
-                        {renderRow("Satış / Sözleşme Tarihi", null, editMode, edit, onEditChange, [
+                        {renderRowLocked("Satış / Sözleşme Tarihi", null, edit, [
                           ["satis_tarihi","date"], ["sozlesme_tarihi","date"]
                         ])}
                         <tr>
                           <th>Oluşturma</th>
-                          <td>
-                            {editMode ? (
-                              <input
-                                className="form-control form-control-sm"
-                                type="text"
-                                value={edit.created_at || ""}
-                                onChange={(e) => onEditChange("created_at", e.target.value)}
-                                disabled
-                                title="created_at alanı kilitli"
-                              />
-                            ) : (
-                              <span className="text-muted small">{selected.created_at || "-"}</span>
-                            )}
-                          </td>
+                          <td><span className="text-muted small">{selected.created_at || "-"}</span></td>
                         </tr>
                       </tbody>
                     </table>
@@ -755,14 +748,14 @@ export default function App() {
               <div className="w-100" style={{borderTop:"1px dashed #e3e8ef"}} />
               <DonutChart
                 title="24 Gayrimenkul"
-                delivered={delivered24G}
-                remaining={remaining24G}
+                delivered={useMemo(() => rows24G.filter(isDelivered).length, [rows24G])}
+                remaining={Math.max(rows24G.length - rows24G.filter(isDelivered).length, 0)}
               />
               <div className="w-100" style={{borderTop:"1px dashed #e3e8ef"}} />
               <DonutChart
                 title="Güneşli Proje"
-                delivered={deliveredGunesli}
-                remaining={remainingGunesli}
+                delivered={useMemo(() => rowsGunesli.filter(isDelivered).length, [rowsGunesli])}
+                remaining={Math.max(rowsGunesli.length - rowsGunesli.filter(isDelivered).length, 0)}
               />
             </div>
           </div>
@@ -770,15 +763,13 @@ export default function App() {
       </div>
 
       {/* Alt bilgi */}
-      <div className="text-center text-muted small mt-3">
-        Eray Önay
-      </div>
+      <div className="text-center text-muted small mt-3">Eray Önay</div>
     </div>
   );
 }
 
 /** ====== Inline render yardımcıları ====== */
-function renderRow(label, field, editMode, edit, onEditChange, multi = null, typeHint = null) {
+function renderRow(label, field, edit, onEditChange, multi = null) {
   if (multi && Array.isArray(multi)) {
     return (
       <tr>
@@ -788,7 +779,7 @@ function renderRow(label, field, editMode, edit, onEditChange, multi = null, typ
             {multi.map(([f, t]) => (
               <div key={f} className="d-flex align-items-center gap-2">
                 <span className="small text-muted" style={{minWidth:110}}>{titleCase(f)}</span>
-                {inputFor(f, edit, onEditChange, t)}
+                {inputFor(f, edit, onEditChange, t, isLockedGlobal(f))}
               </div>
             ))}
           </div>
@@ -800,13 +791,40 @@ function renderRow(label, field, editMode, edit, onEditChange, multi = null, typ
     <tr>
       <th>{label}</th>
       <td>
-        {field ? inputFor(field, edit, onEditChange, typeHint) : <span className="text-muted">—</span>}
+        {field ? inputFor(field, edit, onEditChange, SCHEMA_TYPES[field], isLockedGlobal(field)) : <span className="text-muted">—</span>}
       </td>
     </tr>
   );
 }
 
-function renderRowTriple(label, fields, editMode, edit, onEditChange) {
+function renderRowLocked(label, field, edit, multi = null) {
+  // Tamamen salt-okunur render (admin bile değiştiremez)
+  if (multi && Array.isArray(multi)) {
+    return (
+      <tr>
+        <th>{label}</th>
+        <td>
+          <div className="d-flex gap-2 flex-wrap">
+            {multi.map(([f, t]) => (
+              <div key={f} className="d-flex align-items-center gap-2">
+                <span className="small text-muted" style={{minWidth:110}}>{titleCase(f)}</span>
+                {readOnlyField(edit?.[f], t)}
+              </div>
+            ))}
+          </div>
+        </td>
+      </tr>
+    );
+  }
+  return (
+    <tr>
+      <th>{label}</th>
+      <td>{readOnlyField(edit?.[field], SCHEMA_TYPES[field])}</td>
+    </tr>
+  );
+}
+
+function renderRowTripleLocked(label, fields, edit) {
   return (
     <tr>
       <th>{label}</th>
@@ -815,7 +833,7 @@ function renderRowTriple(label, fields, editMode, edit, onEditChange) {
           {fields.map((f) => (
             <div key={f} className="d-flex align-items-center gap-2">
               <span className="small text-muted" style={{minWidth:110}}>{titleCase(f)}</span>
-              {inputFor(f, edit, onEditChange, SCHEMA_TYPES[f])}
+              {readOnlyField(edit?.[f], SCHEMA_TYPES[f])}
             </div>
           ))}
         </div>
@@ -824,18 +842,30 @@ function renderRowTriple(label, fields, editMode, edit, onEditChange) {
   );
 }
 
-function inputFor(field, edit, onEditChange, typeHint) {
-  // Özel alanlar: Var/Yok & Tapu seçimi
-  if (field === "kdv_muafiyeti" || field === "ipotek_durumu") {
-    return selectVarYok(field, edit, onEditChange);
-  }
-  if (field === "tapu_durumu") {
-    return selectTapu(field, edit, onEditChange);
+function readOnlyField(value, typeHint) {
+  if (typeHint === "date") return <span>{value ? String(value).slice(0,10) : "-"}</span>;
+  if (typeHint === "time") return <span>{value ? String(value).slice(0,5) : "-"}</span>;
+  if (typeHint === "numeric") return <span>{value === null || value === undefined || value === "" ? "-" : Number(value).toLocaleString("tr-TR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " ₺"}</span>;
+  return <span>{value ?? "-"}</span>;
+}
+
+// Global kilit (admin + beyaz liste dikkate alınır)
+function isLockedGlobal(field) {
+  if (field === "created_at") return true;
+  if (!window?.localStorage?.getItem("tp_admin")) return true;
+  return !ALLOW_EDIT_FIELDS.has(field);
+}
+
+function inputFor(field, edit, onEditChange, typeHint, lockedForce = false) {
+  // Özel alanlar: Var/Yok & Tapu seçimi (her zaman salt okunur göstermek istiyoruz)
+  if (field === "kdv_muafiyeti" || field === "ipotek_durumu" || field === "tapu_durumu") {
+    return readOnlyField(edit?.[field], SCHEMA_TYPES[field]);
   }
 
   const t = (typeHint || SCHEMA_TYPES[field] || "text");
   const val = edit?.[field] ?? "";
-  const disabled = field === "created_at";
+
+  const locked = lockedForce || isLockedGlobal(field);
 
   if (t === "date") {
     const v = val ? String(val).slice(0,10) : "";
@@ -845,7 +875,7 @@ function inputFor(field, edit, onEditChange, typeHint) {
         type="date"
         value={v}
         onChange={(e) => onEditChange(field, e.target.value)}
-        disabled={disabled}
+        disabled={locked}
         style={{ minWidth: 160 }}
       />
     );
@@ -858,7 +888,7 @@ function inputFor(field, edit, onEditChange, typeHint) {
         type="time"
         value={v}
         onChange={(e) => onEditChange(field, e.target.value)}
-        disabled={disabled}
+        disabled={locked}
         style={{ minWidth: 120 }}
       />
     );
@@ -870,7 +900,7 @@ function inputFor(field, edit, onEditChange, typeHint) {
         type="text"
         value={val ?? ""}
         onChange={(e) => onEditChange(field, e.target.value)}
-        disabled={disabled}
+        disabled={locked}
         style={{ minWidth: 120 }}
         placeholder={t === "int" ? "0" : "0,00"}
       />
@@ -882,42 +912,10 @@ function inputFor(field, edit, onEditChange, typeHint) {
       type="text"
       value={val ?? ""}
       onChange={(e) => onEditChange(field, e.target.value)}
-      disabled={disabled}
+      disabled={locked}
       style={{ minWidth: 200 }}
       placeholder={titleCase(field)}
     />
-  );
-}
-
-/** ---- Seçiciler ---- */
-function selectVarYok(field, edit, onEditChange) {
-  const val = (edit?.[field] || "").toString();
-  const norm = val ? (val.toLowerCase().includes("var") ? "Var" : "Yok") : "Yok";
-  return (
-    <select
-      className="form-select form-select-sm"
-      value={norm}
-      onChange={(e) => onEditChange(field, e.target.value)}
-      style={{ minWidth: 130 }}
-    >
-      <option value="Var">Var</option>
-      <option value="Yok">Yok</option>
-    </select>
-  );
-}
-function selectTapu(field, edit, onEditChange) {
-  const val = (edit?.[field] || "").toString();
-  const norm = val ? val : "Devredilmedi";
-  return (
-    <select
-      className="form-select form-select-sm"
-      value={norm}
-      onChange={(e) => onEditChange(field, e.target.value)}
-      style={{ minWidth: 150 }}
-    >
-      <option value="Devredildi">Devredildi</option>
-      <option value="Devredilmedi">Devredilmedi</option>
-    </select>
   );
 }
 
