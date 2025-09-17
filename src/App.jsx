@@ -117,7 +117,6 @@ const SCHEMA_TYPES = {
   kdv_muafiyeti:"text", ipotek_durumu:"text", tapu_durumu:"text",
   suzme_sayac:"text" // "takıldı" | "takılmadı"
 };
-// Admin UI'de değiştirilebilir (DB'de de anon'a izin verdiğimiz) alanlar:
 const ALLOW_EDIT_FIELDS = new Set([
   "teslim_randevu_tarihi",
   "teslim_randevu_saati",
@@ -140,7 +139,7 @@ function coerceValue(field, value) {
       return Number.isNaN(n) ? null : n;
     }
     case "date":
-      return String(value); // YYYY-MM-DD
+      return String(value);
     case "time": {
       const s = String(value);
       if (/^\d{2}:\d{2}:\d{2}$/.test(s)) return s;
@@ -204,7 +203,6 @@ export default function App(){
       });
       setRows(data);
 
-      // Seçili kayıt güncellensin
       if(selected){
         const again=data.find(r=>r.daire===selected.daire);
         setSelected(again||null);
@@ -439,14 +437,18 @@ export default function App(){
                                   <span className="fw-semibold">{r.daire||`${r.blok}-${r.no}`}</span>
                                   <span className="badge bg-primary">{r.teslim_randevu_saati?formatTimeStr(r.teslim_randevu_saati):"—"}</span>
                                 </div>
-                                <div className="small text-muted">
-                                  {(r.musteri||r.mal_sahibi||"-")} • {(r.teslim_durumu||"Durum Yok")}
-                                  {/* Demirbaş ödemesini sadece teslim edildiyse göster */}
-                                  {isDelivered(r) && r.demirbas_odeme_durumu ? (
-                                    <span className={`badge ms-2 ${demirbasState(r.demirbas_odeme_durumu)==="odendi"?"bg-success":"bg-warning text-dark"}`}>
-                                      Demirbaş: {r.demirbas_odeme_durumu}
-                                    </span>
-                                  ):null}
+                                <div className="small text-muted d-flex flex-wrap align-items-center gap-2">
+                                  <span>{(r.musteri||r.mal_sahibi||"-")} • {(r.teslim_durumu||"Durum Yok")}</span>
+                                  {/* Demirbaş: her randevu için göster; durumlara göre farklı rozet */}
+                                  {(() => {
+                                    const st = demirbasState(r.demirbas_odeme_durumu);
+                                    if (st === "odendi") {
+                                      return <span className="badge bg-success">✓ Demirbaş: Ödendi</span>;
+                                    } else if (st === "odenmedi") {
+                                      return <span className="badge bg-danger">✗ Demirbaş: Ödenmedi</span>;
+                                    }
+                                    return <span className="badge bg-secondary">— Demirbaş</span>;
+                                  })()}
                                 </div>
                               </div>
                             ))}
