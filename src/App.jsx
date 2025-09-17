@@ -153,7 +153,7 @@ function coerceValue(field, value) {
   }
 }
 
-/** ========== Normalizasyonlar ========== */
+/** ========== Normalizasyonlar & yardımcılar ========== */
 const isSold = (r)=>Boolean((r.musteri && String(r.musteri).trim()) || r.satis_tarihi);
 const isDelivered = (r)=>{ const d=(r.teslim_durumu||"").toLowerCase(); return d.includes("teslim edildi"); };
 const statusEq = (r, text)=> ((r?.teslim_durumu || "").toLowerCase() === text.toLowerCase());
@@ -170,6 +170,19 @@ function prettySuzme(v){
   if (v === null || v === undefined || v === "") return "-";
   return normSuzmeTakildi(v) ? "Takıldı" : "Takılmadı";
 }
+// Acenta / etiket esnek eşleşme (aksan/boşluk farkı, includes)
+function slugify(s){
+  return String(s||"")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g,"") // aksanları sil
+    .replace(/[^a-z0-9]+/g,"")      // harf/rakam dışını sil
+    .trim();
+}
+function matchPatterns(value, patterns){
+  const sv = slugify(value);
+  return patterns.some(p => sv.includes(slugify(p)));
+}
 
 /** ========== App ========== */
 export default function App(){
@@ -183,7 +196,7 @@ export default function App(){
   const [isAdmin,setIsAdmin]=useState(()=>window.localStorage.getItem("tp_admin")==="1");
   const [showAllList,setShowAllList]=useState(false);
   const [edit,setEdit]=useState({});
-  const [notice,setNotice]=useState(""); // Kaydedildi uyarısı
+  const [notice,setNotice]=useState("");
   const pkRef=useMemo(()=>selected?selected.daire:null,[selected]);
 
   const [currentWeekStart,setCurrentWeekStart]=useState(()=>startOfWeek(new Date()));
@@ -202,7 +215,6 @@ export default function App(){
         return ab.localeCompare(bb,"tr");
       });
       setRows(data);
-
       if(selected){
         const again=data.find(r=>r.daire===selected.daire);
         setSelected(again||null);
@@ -244,10 +256,15 @@ export default function App(){
     return map;
   },[rows,weekDays]);
 
-  /** ---- Donut istatistikleri ---- */
-  const byAcentaEq=(name)=>rows.filter(r=>(r.acenta||"").toLowerCase()===(name||"").toLowerCase());
-  const rows24G=useMemo(()=>byAcentaEq("24 gayrimenkul"),[rows]);
-  const rowsGunesli=useMemo(()=>byAcentaEq("güneşli proje"),[rows]);
+  /** ---- Gruplar & Donut istatistikleri ---- */
+  const rows24G=useMemo(
+    ()=>rows.filter(r=>matchPatterns(r.acenta, ["24 gayrimenkul","24gayrimenkul","24-gayrimenkul"])),
+    [rows]
+  );
+  const rowsGunesli=useMemo(
+    ()=>rows.filter(r=>matchPatterns(r.acenta, ["güneşli proje","gunesli proje","gunesliproje","güneşliproje","gunesli"])),
+    [rows]
+  );
 
   const groupStats=(groupRows)=>{
     const sold=groupRows.filter(isSold);
@@ -324,7 +341,7 @@ export default function App(){
   function onEditChange(field,value){ setEdit(p=>({...p,[field]:value})); }
   function isLocked(field){ if(field==="created_at") return true; if(!isAdmin) return true; return !ALLOW_EDIT_FIELDS.has(field); }
 
-  /** ---- Kaydet (fetchAll sonrası 'Kaydedildi' uyarısı) ---- */
+  /** ---- Kaydet ---- */
   async function handleSave(){
     if(!isAdmin||!selected) return;
     const original=selected, changed={};
@@ -354,7 +371,7 @@ export default function App(){
     <div className="container-fluid py-3">
       {/* Üst bar */}
       <div className="d-flex align-items-center justify-content-between mb-3">
-        <h1 className="h4 mb-0">Teslim Paneli</h1>
+        <h1 className="h4 mb-0">Flat24 Teslim Paneli</h1>
         <div className="d-flex align-items-center gap-2">
           <button className="btn btn-outline-secondary btn-sm" onClick={fetchAll} disabled={loading}>{loading?"Yükleniyor...":"Yenile"}</button>
           <button className={`btn btn-sm ${isAdmin?"btn-danger":"btn-primary"}`} onClick={handleLogin} title={isAdmin?"Çıkış yap":"Giriş yap"}>
@@ -439,14 +456,10 @@ export default function App(){
                                 </div>
                                 <div className="small text-muted d-flex flex-wrap align-items-center gap-2">
                                   <span>{(r.musteri||r.mal_sahibi||"-")} • {(r.teslim_durumu||"Durum Yok")}</span>
-                                  {/* Demirbaş: her randevu için göster; durumlara göre farklı rozet */}
-                                  {(() => {
+                                  {(() => { // Demirbaş rozeti: her randevuda, net farklı
                                     const st = demirbasState(r.demirbas_odeme_durumu);
-                                    if (st === "odendi") {
-                                      return <span className="badge bg-success">✓ Demirbaş: Ödendi</span>;
-                                    } else if (st === "odenmedi") {
-                                      return <span className="badge bg-danger">✗ Demirbaş: Ödenmedi</span>;
-                                    }
+                                    if (st === "odendi") return <span className="badge bg-success">✓ Demirbaş: Ödendi</span>;
+                                    if (st === "odenmedi") return <span className="badge bg-danger">✗ Demirbaş: Ödenmedi</span>;
                                     return <span className="badge bg-secondary">— Demirbaş</span>;
                                   })()}
                                 </div>
@@ -586,7 +599,7 @@ export default function App(){
         {/* SAĞ: Donutlar */}
         <div className="col-12 col-lg-2">
           <div className="card h-100">
-            <div className="card-header py-2"><strong>Teslim Kırılımı</strong></div>
+            <div className="card-header py-2"><strong>Özet</strong></div>
             <div className="card-body d-flex flex-column gap-4 align-items-center">
               <DonutChart title="Toplam" delivered={statsTotal.delivered} remaining={statsTotal.remaining} stock={statsTotal.stock} baslayanYasam={statsTotal.baslayanYasam}/>
               <div className="w-100" style={{borderTop:"1px dashed #e3e8ef"}}/>
