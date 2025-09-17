@@ -157,6 +157,7 @@ function coerceValue(field, value) {
 /** ========== Normalizasyonlar ========== */
 const isSold = (r)=>Boolean((r.musteri && String(r.musteri).trim()) || r.satis_tarihi);
 const isDelivered = (r)=>{ const d=(r.teslim_durumu||"").toLowerCase(); return d.includes("teslim edildi"); };
+const statusEq = (r, text)=> ((r?.teslim_durumu || "").toLowerCase() === text.toLowerCase());
 const normVarYok = (v)=>{ const s=(v||"").toLowerCase(); if(!s) return "Yok"; if(s.includes("var")) return "Var"; if(s.includes("yok")) return "Yok"; return "Yok"; };
 const normTapu = (v)=>{ const s=(v||"").toString().trim(); return s || "Devredilmedi"; };
 const normSuzmeTakildi = (v)=>{ const s=(v||"").toLowerCase(); return s.includes("takıldı")||s.includes("takildi"); };
@@ -179,6 +180,7 @@ export default function App(){
   const [isAdmin,setIsAdmin]=useState(()=>window.localStorage.getItem("tp_admin")==="1");
   const [showAllList,setShowAllList]=useState(false);
   const [edit,setEdit]=useState({});
+  const [notice,setNotice]=useState(""); // Kaydedildi uyarısı
   const pkRef=useMemo(()=>selected?selected.daire:null,[selected]);
 
   const [currentWeekStart,setCurrentWeekStart]=useState(()=>startOfWeek(new Date()));
@@ -259,15 +261,23 @@ export default function App(){
     }
   }
 
-  /** ---- HERKES: Teslim Edildi / Teslim Edilmedi ---- */
-  async function markDelivered(r){ if(!r?.daire) return;
-    if(isDelivered(r)) return;
+  /** ---- HERKES: Teslim statüleri ---- */
+  async function markDelivered(r){
+    if(!r?.daire) return;
+    if(statusEq(r,"teslim edildi")) return;
     try{ await patchByDaire(r.daire,{teslim_durumu:"Teslim Edildi"}); await fetchAll(); }
     catch(e){ alert("Güncelleme başarısız: "+e.message); }
   }
-  async function markUndelivered(r){ if(!r?.daire) return;
-    if(!isDelivered(r)) return;
+  async function markUndelivered(r){
+    if(!r?.daire) return;
+    if(statusEq(r,"teslim edilmedi")) return;
     try{ await patchByDaire(r.daire,{teslim_durumu:"Teslim Edilmedi"}); await fetchAll(); }
+    catch(e){ alert("Güncelleme başarısız: "+e.message); }
+  }
+  async function markRejected(r){
+    if(!r?.daire) return;
+    if(statusEq(r,"teslim reddedildi")) return;
+    try{ await patchByDaire(r.daire,{teslim_durumu:"Teslim Reddedildi"}); await fetchAll(); }
     catch(e){ alert("Güncelleme başarısız: "+e.message); }
   }
 
@@ -302,7 +312,7 @@ export default function App(){
   function onEditChange(field,value){ setEdit(p=>({...p,[field]:value})); }
   function isLocked(field){ if(field==="created_at") return true; if(!isAdmin) return true; return !ALLOW_EDIT_FIELDS.has(field); }
 
-  /** ---- Kaydet (FIX: fetchAll sonrası tekrar eski seçimi set etmiyoruz) ---- */
+  /** ---- Kaydet (fetchAll sonrası 'Kaydedildi' uyarısı) ---- */
   async function handleSave(){
     if(!isAdmin||!selected) return;
     const original=selected, changed={};
@@ -316,12 +326,13 @@ export default function App(){
     if(Object.keys(changed).length===0) return;
     try{
       await patchByDaire(pkRef,changed);
-      await fetchAll(); // yeterli: selected/edit bu fonksiyon içinde güncelleniyor
+      await fetchAll();
+      setNotice("Kaydedildi");
+      setTimeout(()=>setNotice(""), 2000);
     }catch(e){
       alert("Kaydetme başarısız: "+e.message);
     }
   }
-  function handleCancel(){ setEdit({...selected}); }
 
   /** ---- Liste: 5 ön gösterim + Hepsini Göster ---- */
   const listToShow=useMemo(()=> search.trim()?filtered : (showAllList?filtered:filtered.slice(0,5)), [filtered,search,showAllList]);
@@ -437,10 +448,28 @@ export default function App(){
               <div className="mt-4">
                 <h2 className="h6 d-flex justify-content-between align-items-center">
                   <span>Daire Özeti</span>
-                  <span className="d-flex gap-2">
-                    <button className="btn btn-sm btn-outline-success" onClick={()=>markDelivered(selected)} disabled={!selected || isDelivered(selected)} title='Durumu "Teslim Edildi" yap'>Teslim Edildi</button>
-                    <button className="btn btn-sm btn-outline-danger" onClick={()=>markUndelivered(selected)} disabled={!selected || !isDelivered(selected)} title='Durumu "Teslim Edilmedi" yap'>Teslim Edilmedi</button>
-                  </span>
+                  {selected && (
+                    <span className="d-flex flex-wrap gap-2">
+                      <button className="btn btn-sm btn-outline-success"
+                        onClick={()=>markDelivered(selected)}
+                        disabled={statusEq(selected,"teslim edildi")}
+                        title='Durumu "Teslim Edildi" yap'>
+                        Teslim Edildi
+                      </button>
+                      <button className="btn btn-sm btn-outline-danger"
+                        onClick={()=>markUndelivered(selected)}
+                        disabled={statusEq(selected,"teslim edilmedi")}
+                        title='Durumu "Teslim Edilmedi" yap'>
+                        Teslim Edilmedi
+                      </button>
+                      <button className="btn btn-sm btn-outline-warning"
+                        onClick={()=>markRejected(selected)}
+                        disabled={statusEq(selected,"teslim reddedildi")}
+                        title='Durumu "Teslim Reddedildi" yap'>
+                        Teslim Reddedildi
+                      </button>
+                    </span>
+                  )}
                 </h2>
 
                 {!selected ? (
@@ -453,7 +482,7 @@ export default function App(){
                           <th colSpan={2}><div className="fs-5 fw-bold text-primary">{selected.daire || `${selected.blok}-${selected.no}`}</div></th>
                         </tr>
 
-                        {/* 1) Randevu + Kaydet/Vazgeç (Kaydet butonu burada, talebine göre yakın) */}
+                        {/* 1) Randevu + Kaydet (Vazgeç kaldırıldı) */}
                         <tr>
                           <th>Randevu Tarihi / Saati</th>
                           <td>
@@ -461,9 +490,9 @@ export default function App(){
                               {inputFor("teslim_randevu_tarihi", edit, onEditChange, "date", isLockedGlobal("teslim_randevu_tarihi"))}
                               {inputFor("teslim_randevu_saati", edit, onEditChange, "time", isLockedGlobal("teslim_randevu_saati"))}
                               {isAdmin && (
-                                <span className="ms-auto d-flex gap-2">
+                                <span className="ms-auto d-flex align-items-center gap-2">
                                   <button className="btn btn-sm btn-primary" onClick={handleSave}>Kaydet</button>
-                                  <button className="btn btn-sm btn-outline-secondary" onClick={handleCancel}>Vazgeç</button>
+                                  {notice && <span className="text-success fw-semibold small">{notice}</span>}
                                 </span>
                               )}
                             </div>
@@ -487,8 +516,8 @@ export default function App(){
                               const st = demirbasState(selected.demirbas_odeme_durumu);
                               return (
                                 <>
-                                  <button className="btn btn-sm btn-outline-success" onClick={()=>setDemirbas(selected,true)} disabled={!selected || st==="odendi"}>Ödendi</button>
-                                  <button className="btn btn-sm btn-outline-danger" onClick={()=>setDemirbas(selected,false)} disabled={!selected || st==="odenmedi"}>Ödenmedi</button>
+                                  <button className="btn btn-sm btn-outline-success" onClick={()=>setDemirbas(selected,true)} disabled={st==="odendi"}>Ödendi</button>
+                                  <button className="btn btn-sm btn-outline-danger" onClick={()=>setDemirbas(selected,false)} disabled={st==="odenmedi"}>Ödenmedi</button>
                                 </>
                               );
                             })()}
@@ -500,8 +529,8 @@ export default function App(){
                           <th>Başlayan Yaşam (Süzme Sayaç)</th>
                           <td className="d-flex align-items-center gap-2 flex-wrap">
                             {readOnlyField(selected.suzme_sayac,"text")}
-                            <button className="btn btn-sm btn-outline-success" onClick={()=>setSuzme(selected,true)} disabled={!selected || normSuzmeTakildi(selected.suzme_sayac)}>Takıldı</button>
-                            <button className="btn btn-sm btn-outline-danger" onClick={()=>setSuzme(selected,false)} disabled={!selected || !normSuzmeTakildi(selected.suzme_sayac)}>Takılmadı</button>
+                            <button className="btn btn-sm btn-outline-success" onClick={()=>setSuzme(selected,true)} disabled={normSuzmeTakildi(selected.suzme_sayac)}>Takıldı</button>
+                            <button className="btn btn-sm btn-outline-danger" onClick={()=>setSuzme(selected,false)} disabled={!normSuzmeTakildi(selected.suzme_sayac)}>Takılmadı</button>
                           </td>
                         </tr>
 
