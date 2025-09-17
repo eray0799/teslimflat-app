@@ -46,6 +46,7 @@ function useTheme() {
         .appt:hover{background:#f3f7ff}
         .table td,.table th{vertical-align:middle}
         .form-control,.form-select{height:32px;padding:0 .5rem}
+        /* Daire özetinde kompakt bilgi ızgarası */
         .kv{display:grid;grid-template-columns:1fr 1fr;gap:.5rem 1rem}
         .kv>div{background:#fff;border:1px solid #e9eef6;border-radius:.5rem;padding:.5rem .75rem}
         .kv dt{font-size:.8rem;color:#6c757d;margin:0}
@@ -65,9 +66,9 @@ const toISODate = (d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"
 const formatTRDate = (d)=>d.toLocaleDateString("tr-TR",{year:"numeric",month:"2-digit",day:"2-digit"});
 const formatTimeStr = (t)=>{ if(!t) return ""; const p=t.split(":"); return `${p[0]}:${p[1]}`; };
 
-/** ========== Donut Grafik ========== */
+/** ========== Donut Grafik (satılanlar üzerinden oran) ========== */
 function DonutChart({ title, delivered, remaining, stock=0, baslayanYasam=0, size=180, stroke=28 }) {
-  const total = delivered + remaining; // oran satılanlar üzerinden
+  const total = delivered + remaining; // sadece satılanlar
   const deliveredPct = total ? delivered/total : 0;
   const remainingPct = total ? remaining/total : 0;
   const radius=(size-stroke)/2, circ=2*Math.PI*radius;
@@ -102,7 +103,7 @@ function DonutChart({ title, delivered, remaining, stock=0, baslayanYasam=0, siz
   );
 }
 
-/** ========== Şema ========== */
+/** ========== Şema ve izinli alanlar ========== */
 const SCHEMA_TYPES = {
   daire:"text", created_at:"timestamp", mal_sahibi:"text", durum:"text",
   blok:"text", no:"int", kat:"int", tip:"text", cephe:"text",
@@ -116,7 +117,42 @@ const SCHEMA_TYPES = {
   kdv_muafiyeti:"text", ipotek_durumu:"text", tapu_durumu:"text",
   suzme_sayac:"text" // "takıldı" | "takılmadı"
 };
-const ALLOW_EDIT_FIELDS = new Set(["teslim_randevu_tarihi","teslim_randevu_saati","teslim_durumu","teslim_notu","demirbas_odeme_durumu"]);
+// Admin UI'de değiştirilebilir (DB'de de anon'a izin verdiğimiz) alanlar:
+const ALLOW_EDIT_FIELDS = new Set([
+  "teslim_randevu_tarihi",
+  "teslim_randevu_saati",
+  "teslim_durumu",
+  "teslim_notu",
+  "demirbas_odeme_durumu",
+]);
+
+/** ========== Tip dönüştürücü ========== */
+function coerceValue(field, value) {
+  const t = SCHEMA_TYPES[field] || "text";
+  if (value === "" || value === null || value === undefined) return null;
+  switch (t) {
+    case "int": {
+      const n = parseInt(String(value).replace(",", "."), 10);
+      return Number.isNaN(n) ? null : n;
+    }
+    case "numeric": {
+      const n = parseFloat(String(value).replace(/\./g, "").replace(",", "."));
+      return Number.isNaN(n) ? null : n;
+    }
+    case "date":
+      return String(value); // YYYY-MM-DD
+    case "time": {
+      const s = String(value);
+      if (/^\d{2}:\d{2}:\d{2}$/.test(s)) return s;
+      if (/^\d{1,2}:\d{2}$/.test(s)) return s.padStart(5, "0") + ":00";
+      return null;
+    }
+    case "timestamp":
+      return String(value);
+    default:
+      return String(value);
+  }
+}
 
 /** ========== Normalizasyonlar ========== */
 const isSold = (r)=>Boolean((r.musteri && String(r.musteri).trim()) || r.satis_tarihi);
@@ -124,8 +160,6 @@ const isDelivered = (r)=>{ const d=(r.teslim_durumu||"").toLowerCase(); return d
 const normVarYok = (v)=>{ const s=(v||"").toLowerCase(); if(!s) return "Yok"; if(s.includes("var")) return "Var"; if(s.includes("yok")) return "Yok"; return "Yok"; };
 const normTapu = (v)=>{ const s=(v||"").toString().trim(); return s || "Devredilmedi"; };
 const normSuzmeTakildi = (v)=>{ const s=(v||"").toLowerCase(); return s.includes("takıldı")||s.includes("takildi"); };
-
-/* --- BURASI KRİTİK: Demirbaş ödeme durumunu kesin normalize et --- */
 function demirbasState(v){
   const s=(v||"").toLowerCase().trim();
   if (s.includes("ödenmedi")) return "odenmedi";
@@ -150,6 +184,7 @@ export default function App(){
   const [currentWeekStart,setCurrentWeekStart]=useState(()=>startOfWeek(new Date()));
   const weekDays=useMemo(()=>weekdaysOfWeek(currentWeekStart),[currentWeekStart]);
 
+  /** ---- Veri çek ---- */
   async function fetchAll(){
     setLoading(true); setErr("");
     try{
@@ -162,15 +197,19 @@ export default function App(){
         return ab.localeCompare(bb,"tr");
       });
       setRows(data);
+
+      // Seçili kayıt güncellensin
       if(selected){
         const again=data.find(r=>r.daire===selected.daire);
-        setSelected(again||null); setEdit(again?{...again}:{});
+        setSelected(again||null);
+        setEdit(again?{...again}:{});
       }
     }catch(e){ setErr(e.message); }
     finally{ setLoading(false); }
   }
   useEffect(()=>{ fetchAll(); },[]);
 
+  /** ---- Filtre ---- */
   const filtered=useMemo(()=>{
     const q=search.trim().toLowerCase();
     if(!q) return rows;
@@ -183,6 +222,7 @@ export default function App(){
     });
   },[rows,search]);
 
+  /** ---- Takvim ---- */
   const appointmentsByDay=useMemo(()=>{
     const map={}; weekDays.forEach(d=>map[toISODate(d)]=[]);
     rows.forEach(r=>{ if(!r.teslim_randevu_tarihi) return; const key=r.teslim_randevu_tarihi; if(map[key]) map[key].push(r); });
@@ -190,6 +230,7 @@ export default function App(){
     return map;
   },[rows,weekDays]);
 
+  /** ---- Donut istatistikleri ---- */
   const byAcentaEq=(name)=>rows.filter(r=>(r.acenta||"").toLowerCase()===(name||"").toLowerCase());
   const rows24G=useMemo(()=>byAcentaEq("24 gayrimenkul"),[rows]);
   const rowsGunesli=useMemo(()=>byAcentaEq("güneşli proje"),[rows]);
@@ -206,14 +247,19 @@ export default function App(){
   const stats24=useMemo(()=>groupStats(rows24G),[rows24G]);
   const statsGun=useMemo(()=>groupStats(rowsGunesli),[rowsGunesli]);
 
+  /** ---- REST yardımcıları ---- */
   async function patchByDaire(daireKey,body){
     const res=await fetch(`${REST_URL}?daire=eq.${encodeURIComponent(daireKey)}`,{
       method:"PATCH", headers:REST_HEADERS, body:JSON.stringify(body)
     });
-    if(!res.ok) throw new Error(`Güncelleme hatası: ${res.status} ${res.statusText}`);
+    if(!res.ok){
+      let txt="";
+      try{ txt=await res.text(); }catch{}
+      throw new Error(`Güncelleme hatası: ${res.status} ${res.statusText} ${txt}`);
+    }
   }
 
-  // HERKES: Teslim Edildi / Teslim Edilmedi
+  /** ---- HERKES: Teslim Edildi / Teslim Edilmedi ---- */
   async function markDelivered(r){ if(!r?.daire) return;
     if(isDelivered(r)) return;
     try{ await patchByDaire(r.daire,{teslim_durumu:"Teslim Edildi"}); await fetchAll(); }
@@ -225,7 +271,7 @@ export default function App(){
     catch(e){ alert("Güncelleme başarısız: "+e.message); }
   }
 
-  // HERKES: Demirbaş Ödendi / Ödenmedi (doğru disable mantığı)
+  /** ---- HERKES: Demirbaş Ödendi / Ödenmedi ---- */
   async function setDemirbas(r,ok){
     if(!r?.daire) return;
     const state=demirbasState(r.demirbas_odeme_durumu);
@@ -234,7 +280,7 @@ export default function App(){
     catch(e){ alert("Güncelleme başarısız: "+e.message); }
   }
 
-  // HERKES: Süzme sayaç Takıldı / Takılmadı
+  /** ---- HERKES: Süzme sayaç Takıldı / Takılmadı ---- */
   async function setSuzme(r,takildi){
     if(!r?.daire) return;
     const cur=normSuzmeTakildi(r.suzme_sayac);
@@ -243,6 +289,7 @@ export default function App(){
     catch(e){ alert("Güncelleme başarısız: "+e.message); }
   }
 
+  /** ---- Admin giriş/çıkış ---- */
   function handleLogin(){
     if(isAdmin){ setIsAdmin(false); window.localStorage.removeItem("tp_admin"); return; }
     const code=window.prompt("Giriş kodu:");
@@ -250,14 +297,16 @@ export default function App(){
     else if(code!==null){ alert("Kod hatalı."); }
   }
 
+  /** ---- Inline edit ---- */
   useEffect(()=>{ setEdit(selected?{...selected}:{}) },[selected]);
   function onEditChange(field,value){ setEdit(p=>({...p,[field]:value})); }
   function isLocked(field){ if(field==="created_at") return true; if(!isAdmin) return true; return !ALLOW_EDIT_FIELDS.has(field); }
 
+  /** ---- Kaydet (FIX: fetchAll sonrası tekrar eski seçimi set etmiyoruz) ---- */
   async function handleSave(){
     if(!isAdmin||!selected) return;
     const original=selected, changed={};
-    Object.keys(SCHEMA_TYPES).forEach(k=>{
+    Object.keys(SCHEMA_TYPES).forEach((k)=>{
       if(!(k in original)&&!(k in edit)) return;
       if(isLocked(k)) return;
       const orig=original[k]??null, nv=coerceValue(k,edit[k]??null);
@@ -265,15 +314,22 @@ export default function App(){
       if(os!==ns) changed[k]=nv;
     });
     if(Object.keys(changed).length===0) return;
-    try{ await patchByDaire(pkRef,changed); await fetchAll(); }
-    catch(e){ alert("Kaydetme başarısız: "+e.message); }
+    try{
+      await patchByDaire(pkRef,changed);
+      await fetchAll(); // yeterli: selected/edit bu fonksiyon içinde güncelleniyor
+    }catch(e){
+      alert("Kaydetme başarısız: "+e.message);
+    }
   }
   function handleCancel(){ setEdit({...selected}); }
 
+  /** ---- Liste: 5 ön gösterim + Hepsini Göster ---- */
   const listToShow=useMemo(()=> search.trim()?filtered : (showAllList?filtered:filtered.slice(0,5)), [filtered,search,showAllList]);
 
+  /** ---- UI ---- */
   return (
     <div className="container-fluid py-3">
+      {/* Üst bar */}
       <div className="d-flex align-items-center justify-content-between mb-3">
         <h1 className="h4 mb-0">Teslim Paneli</h1>
         <div className="d-flex align-items-center gap-2">
@@ -287,7 +343,7 @@ export default function App(){
       {err && <div className="alert alert-danger py-2">Hata: {err}</div>}
 
       <div className="row g-3">
-        {/* SOL */}
+        {/* SOL: Liste */}
         <div className="col-12 col-lg-3">
           <div className="card h-100">
             <div className="card-header py-2">
@@ -324,7 +380,7 @@ export default function App(){
           </div>
         </div>
 
-        {/* ORTA */}
+        {/* ORTA: Takvim + Daire Özeti */}
         <div className="col-12 col-lg-7">
           <div className="card h-100">
             <div className="card-header d-flex justify-content-between align-items-center py-2">
@@ -339,6 +395,7 @@ export default function App(){
             </div>
 
             <div className="card-body">
+              {/* Günler */}
               <div className="d-flex flex-column gap-3">
                 {weekDays.map(d=>{
                   const key=toISODate(d), items=appointmentsByDay[key]||[];
@@ -359,6 +416,7 @@ export default function App(){
                                 </div>
                                 <div className="small text-muted">
                                   {(r.musteri||r.mal_sahibi||"-")} • {(r.teslim_durumu||"Durum Yok")}
+                                  {/* Demirbaş ödemesini sadece teslim edildiyse göster */}
                                   {isDelivered(r) && r.demirbas_odeme_durumu ? (
                                     <span className={`badge ms-2 ${demirbasState(r.demirbas_odeme_durumu)==="odendi"?"bg-success":"bg-warning text-dark"}`}>
                                       Demirbaş: {r.demirbas_odeme_durumu}
@@ -375,7 +433,7 @@ export default function App(){
                 })}
               </div>
 
-              {/* Seçili daire */}
+              {/* Seçili daire özeti */}
               <div className="mt-4">
                 <h2 className="h6 d-flex justify-content-between align-items-center">
                   <span>Daire Özeti</span>
@@ -395,11 +453,11 @@ export default function App(){
                           <th colSpan={2}><div className="fs-5 fw-bold text-primary">{selected.daire || `${selected.blok}-${selected.no}`}</div></th>
                         </tr>
 
-                        {/* Randevu + Kaydet/Vazgeç */}
+                        {/* 1) Randevu + Kaydet/Vazgeç (Kaydet butonu burada, talebine göre yakın) */}
                         <tr>
                           <th>Randevu Tarihi / Saati</th>
                           <td>
-                            <div className="d-flex gap-2 flex-wrap">
+                            <div className="d-flex gap-2 flex-wrap align-items-center">
                               {inputFor("teslim_randevu_tarihi", edit, onEditChange, "date", isLockedGlobal("teslim_randevu_tarihi"))}
                               {inputFor("teslim_randevu_saati", edit, onEditChange, "time", isLockedGlobal("teslim_randevu_saati"))}
                               {isAdmin && (
@@ -412,13 +470,15 @@ export default function App(){
                           </td>
                         </tr>
 
+                        {/* 2) Teslim Durumu */}
                         {renderRow("Teslim Durumu","teslim_durumu",edit,onEditChange)}
+                        {/* 3) Not */}
                         {renderRow("Not","teslim_notu",edit,onEditChange)}
-
+                        {/* 4) Demirbaş / Aidat (sabit) */}
                         {renderRowLocked("Demirbaş","demirbas",edit)}
                         {renderRowLocked("Aidat","aidat",edit)}
 
-                        {/* Demirbaş Ödeme – iki yönlü */}
+                        {/* 5) Demirbaş Ödeme (iki yönlü) */}
                         <tr>
                           <th>Demirbaş Ödeme</th>
                           <td className="d-flex align-items-center gap-2 flex-wrap">
@@ -435,7 +495,7 @@ export default function App(){
                           </td>
                         </tr>
 
-                        {/* Süzme Sayaç – iki yönlü */}
+                        {/* 6) Başlayan Yaşam (Süzme Sayaç) */}
                         <tr>
                           <th>Başlayan Yaşam (Süzme Sayaç)</th>
                           <td className="d-flex align-items-center gap-2 flex-wrap">
@@ -445,7 +505,7 @@ export default function App(){
                           </td>
                         </tr>
 
-                        {/* BİLGİ IZGARASI */}
+                        {/* Diğer bilgiler – derli toplu ızgara */}
                         <tr>
                           <th colSpan={2}>
                             <div className="kv mt-1">
@@ -478,7 +538,7 @@ export default function App(){
           </div>
         </div>
 
-        {/* SAĞ */}
+        {/* SAĞ: Donutlar */}
         <div className="col-12 col-lg-2">
           <div className="card h-100">
             <div className="card-header py-2"><strong>Teslim Kırılımı</strong></div>
