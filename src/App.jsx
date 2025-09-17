@@ -7,7 +7,7 @@ const ADMIN_CODE = "24admin";
 /** ========== Supabase REST ayarları ========== */
 const SUPABASE_URL = "https://boouupvwgkuptzhujsoj.supabase.co";
 const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJvb3V1cHZ3Z2t1cHR6aHVqc29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc5MzI4MzIsImV4cCI6MjA3MzUwODgzMn0.BkH2X5-WEQCW6QljEF-Uu8WAe6WjmPnMCYapcVh8YL0";
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJvb3V1cHZ3Z2t1cHR6aHVqc29qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTc5MzI4MzIsImV4cCI6MjA3MzUwODgzMn0.BkH2X5-WEQCW6QljEF-U8WAe6WjmPnMCYapcVh8YL0";
 const TABLE = "flat24teslimatlar";
 const REST_URL = `${SUPABASE_URL}/rest/v1/${TABLE}`;
 const REST_HEADERS = {
@@ -170,14 +170,16 @@ function prettySuzme(v){
   if (v === null || v === undefined || v === "") return "-";
   return normSuzmeTakildi(v) ? "Takıldı" : "Takılmadı";
 }
-// Acenta / etiket esnek eşleşme (aksan/boşluk farkı, includes)
+
+// Türkçe güvenli slug
 function slugify(s){
-  return String(s||"")
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g,"") // aksanları sil
-    .replace(/[^a-z0-9]+/g,"")      // harf/rakam dışını sil
-    .trim();
+  let x = String(s||"").toLowerCase();
+  x = x.normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+  x = x
+    .replace(/ı/g,"i").replace(/ş/g,"s").replace(/ç/g,"c")
+    .replace(/ğ/g,"g").replace(/ö/g,"o").replace(/ü/g,"u");
+  x = x.replace(/[^a-z0-9]+/g,"").trim();
+  return x;
 }
 function matchPatterns(value, patterns){
   const sv = slugify(value);
@@ -256,13 +258,13 @@ export default function App(){
     return map;
   },[rows,weekDays]);
 
-  /** ---- Gruplar & Donut istatistikleri ---- */
-  const rows24G=useMemo(
-    ()=>rows.filter(r=>matchPatterns(r.acenta, ["24 gayrimenkul","24gayrimenkul","24-gayrimenkul"])),
+  /** ---- Gruplar (mal_sahibi) & Donut istatistikleri ---- */
+  const rowsOwner24 = useMemo(
+    ()=>rows.filter(r=>matchPatterns(r.mal_sahibi, ["24 gayrimenkul","24-gayrimenkul"])),
     [rows]
   );
-  const rowsGunesli=useMemo(
-    ()=>rows.filter(r=>matchPatterns(r.acenta, ["güneşli proje","gunesli proje","gunesliproje","güneşliproje","gunesli"])),
+  const rowsOwnerArsa = useMemo(
+    ()=>rows.filter(r=>matchPatterns(r.mal_sahibi, ["arsa sahibi","arsasahibi","güneşli proje","gunesli proje"])),
     [rows]
   );
 
@@ -275,8 +277,8 @@ export default function App(){
     return {delivered,remaining,stock,baslayanYasam};
   };
   const statsTotal=useMemo(()=>groupStats(rows),[rows]);
-  const stats24=useMemo(()=>groupStats(rows24G),[rows24G]);
-  const statsGun=useMemo(()=>groupStats(rowsGunesli),[rowsGunesli]);
+  const stats24=useMemo(()=>groupStats(rowsOwner24),[rowsOwner24]);
+  const statsArsa=useMemo(()=>groupStats(rowsOwnerArsa),[rowsOwnerArsa]);
 
   /** ---- REST yardımcıları ---- */
   async function patchByDaire(daireKey,body){
@@ -456,7 +458,7 @@ export default function App(){
                                 </div>
                                 <div className="small text-muted d-flex flex-wrap align-items-center gap-2">
                                   <span>{(r.musteri||r.mal_sahibi||"-")} • {(r.teslim_durumu||"Durum Yok")}</span>
-                                  {(() => { // Demirbaş rozeti: her randevuda, net farklı
+                                  {(() => { // Demirbaş rozeti her randevuda
                                     const st = demirbasState(r.demirbas_odeme_durumu);
                                     if (st === "odendi") return <span className="badge bg-success">✓ Demirbaş: Ödendi</span>;
                                     if (st === "odenmedi") return <span className="badge bg-danger">✗ Demirbaş: Ödenmedi</span>;
@@ -536,11 +538,11 @@ export default function App(){
                         {renderRowLocked("Demirbaş","demirbas",edit)}
                         {renderRowLocked("Aidat","aidat",edit)}
 
-                        {/* 5) Demirbaş Ödeme (iki yönlü) */}
+                        {/* 5) Demirbaş Ödeme */}
                         <tr>
                           <th>Demirbaş Ödeme</th>
                           <td className="d-flex align-items-center gap-2 flex-wrap">
-                            {readOnlyField(selected.demirbas_odeme_durumu,"text")}
+                            <span>{selected.demirbas_odeme_durumu ?? "-"}</span>
                             {(() => {
                               const st = demirbasState(selected.demirbas_odeme_durumu);
                               return (
@@ -605,7 +607,7 @@ export default function App(){
               <div className="w-100" style={{borderTop:"1px dashed #e3e8ef"}}/>
               <DonutChart title="24 Gayrimenkul" delivered={stats24.delivered} remaining={stats24.remaining} stock={stats24.stock} baslayanYasam={stats24.baslayanYasam}/>
               <div className="w-100" style={{borderTop:"1px dashed #e3e8ef"}}/>
-              <DonutChart title="Güneşli Proje" delivered={statsGun.delivered} remaining={statsGun.remaining} stock={statsGun.stock} baslayanYasam={statsGun.baslayanYasam}/>
+              <DonutChart title="Arsa Sahibi" delivered={statsArsa.delivered} remaining={statsArsa.remaining} stock={statsArsa.stock} baslayanYasam={statsArsa.baslayanYasam}/>
             </div>
           </div>
         </div>
