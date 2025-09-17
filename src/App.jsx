@@ -167,6 +167,10 @@ function demirbasState(v){
   if (s.includes("ödendi")) return "odendi";
   return "none";
 }
+function prettySuzme(v){
+  if (v === null || v === undefined || v === "") return "-";
+  return normSuzmeTakildi(v) ? "Takıldı" : "Takılmadı";
+}
 
 /** ========== App ========== */
 export default function App(){
@@ -219,8 +223,18 @@ export default function App(){
       const daire=(r.daire||"").toLowerCase();
       const blok=(r.blok||"").toLowerCase();
       const no=(r.no??"").toString().toLowerCase();
+      const musteri=(r.musteri||"").toLowerCase();
+      const malSahibi=(r.mal_sahibi||"").toLowerCase();
       const combo1=`${blok}${no}`, combo2=`${blok}-${no}`;
-      return daire.includes(q)||blok.includes(q)||no.includes(q)||combo1.includes(q)||combo2.includes(q);
+      return (
+        daire.includes(q) ||
+        blok.includes(q) ||
+        no.includes(q) ||
+        combo1.includes(q) ||
+        combo2.includes(q) ||
+        musteri.includes(q) ||
+        malSahibi.includes(q)
+      );
     });
   },[rows,search]);
 
@@ -360,7 +374,7 @@ export default function App(){
             <div className="card-header py-2">
               <div className="input-group input-group-sm">
                 <span className="input-group-text">Ara</span>
-                <input className="form-control" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Örn: A25 / A-25 / A Blok"/>
+                <input className="form-control" value={search} onChange={(e)=>setSearch(e.target.value)} placeholder="Örn: A25 / A-25 / A Blok / İsim"/>
               </div>
             </div>
             <div className="card-body p-0" style={{maxHeight:680,overflowY:"auto"}}>
@@ -482,7 +496,7 @@ export default function App(){
                           <th colSpan={2}><div className="fs-5 fw-bold text-primary">{selected.daire || `${selected.blok}-${selected.no}`}</div></th>
                         </tr>
 
-                        {/* 1) Randevu + Kaydet (Vazgeç kaldırıldı) */}
+                        {/* 1) Randevu + Kaydet */}
                         <tr>
                           <th>Randevu Tarihi / Saati</th>
                           <td>
@@ -528,7 +542,7 @@ export default function App(){
                         <tr>
                           <th>Başlayan Yaşam (Süzme Sayaç)</th>
                           <td className="d-flex align-items-center gap-2 flex-wrap">
-                            {readOnlyField(selected.suzme_sayac,"text")}
+                            <span>{prettySuzme(selected.suzme_sayac)}</span>
                             <button className="btn btn-sm btn-outline-success" onClick={()=>setSuzme(selected,true)} disabled={normSuzmeTakildi(selected.suzme_sayac)}>Takıldı</button>
                             <button className="btn btn-sm btn-outline-danger" onClick={()=>setSuzme(selected,false)} disabled={!normSuzmeTakildi(selected.suzme_sayac)}>Takılmadı</button>
                           </td>
