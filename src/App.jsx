@@ -32,26 +32,34 @@ function useTheme() {
         .row.g-3{--bs-gutter-x:1rem;--bs-gutter-y:1rem}
         .card{border:0;box-shadow:0 6px 22px rgba(0,0,0,.06)}
         .card-header{background:linear-gradient(180deg,#fff,#f1f4fa);border-bottom:1px solid #e6ebf2}
-        .list-group-item{transition:background-color .12s ease}
+        .list-group-item{transition:background-color .12s ease;cursor:pointer}
         .list-group-item:hover{background:#eef5ff}
+        /* Teslim edilen: açık yeşil */
+        .list-group-item.delivered{background:#e6f7ee !important; color:#16784f !important;}
+        .appt.delivered{background:#e6f7ee !important; color:#16784f !important;}
+        /* Teslim reddedildi: açık kırmızı */
+        .list-group-item.rejected{background:#fde7ea !important; color:#a12a36 !important;}
+        .appt.rejected{background:#fde7ea !important; color:#a12a36 !important;}
         .badge.bg-success{background:#169a5a!important}
         .badge.bg-secondary{background:#7a869a!important}
         .btn-outline-primary{border-color:#7aa7ff}
         .btn-outline-primary:hover{background:#e9f2ff}
-        .day-box{background:#fff;border:1px solid #e3e9fb;border-left:5px solid #0d6efd}
-        .day-head{padding:.5rem .75rem;display:flex;align-items:center;gap:.5rem;background:#f8faff;border-bottom:1px solid #e3e9fb}
+        .day-box{background:#fff;border:1px solid #e3e9fb;border-left:5px solid #0d6efd;border-radius:.5rem}
+        .day-head{padding:.5rem .75rem;display:flex;align-items:center;gap:.5rem;background:#f8faff;border-bottom:1px solid #e3e9fb;border-top-left-radius:.5rem;border-top-right-radius:.5rem}
         .day-pill{display:inline-flex;align-items:center;gap:.5rem;background:#eaf1ff;border:1px solid #cfe1ff;color:#0b5ed7;padding:.2rem .55rem;border-radius:999px;font-weight:600}
         .day-date{color:#4b5a77;font-weight:500}
-        .appt{background:#fff;border:1px solid #e6ebf2}
+        .appt{background:#fff;border:1px solid #e6ebf2;border-radius:.5rem}
         .appt:hover{background:#f3f7ff}
         .table td,.table th{vertical-align:middle}
         .form-control,.form-select{height:32px;padding:0 .5rem}
-        /* Daire özetinde kompakt bilgi ızgarası */
+        /* Daire özeti grid */
         .kv{display:grid;grid-template-columns:1fr 1fr;gap:.5rem 1rem}
         .kv>div{background:#fff;border:1px solid #e9eef6;border-radius:.5rem;padding:.5rem .75rem}
         .kv dt{font-size:.8rem;color:#6c757d;margin:0}
         .kv dd{margin:0;font-weight:600}
         @media (max-width: 992px){ .kv{grid-template-columns:1fr} }
+        /* Donut legend işaretleri */
+        .legend-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
       `;
       document.head.appendChild(style);
     }
@@ -59,51 +67,94 @@ function useTheme() {
 }
 
 /** ========== Tarih yardımcıları ========== */
-const startOfWeek = (date) => { const d=new Date(date); const day=(d.getDay()+6)%7; d.setHours(0,0,0,0); d.setDate(d.getDate()-day); return d; };
-const addDays = (date,n)=>{ const d=new Date(date); d.setDate(d.getDate()+n); return d; };
+const startOfWeek = (date) => {
+  const d=new Date(date);
+  const day=(d.getDay()+6)%7; // Mon=0..Sun=6
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate()-day);
+  return d;
+};
+const addDays = (date,n)=>{ const d=new Date(date); d.setDate(d.getDate()+n); d.setHours(0,0,0,0); return d; };
 const weekdaysOfWeek = (ws)=>Array.from({length:5},(_,i)=>addDays(ws,i));
 const toISODate = (d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
 const formatTRDate = (d)=>d.toLocaleDateString("tr-TR",{year:"numeric",month:"2-digit",day:"2-digit"});
-const formatTimeStr = (t)=>{ if(!t) return ""; const p=t.split(":"); return `${p[0]}:${p[1]}`; };
+const formatTimeStr = (t)=>{ if(!t) return ""; const p=String(t).split(":"); return `${p[0]}:${p[1]}`; };
+const isWeekend = (d) => d.getDay()===6 || d.getDay()===0;
+const clampBusinessDay = (d0) => {
+  const d=new Date(d0); d.setHours(0,0,0,0);
+  if (d.getDay()===6) return addDays(d,2);
+  if (d.getDay()===0) return addDays(d,1);
+  return d;
+};
+const addBusinessDays = (d, dir) => {
+  let nd = addDays(d, dir>0?1:-1);
+  while (isWeekend(nd)) nd = addDays(nd, dir>0?1:-1);
+  return nd;
+};
 
-/** ========== Donut Grafik (satılanlar üzerinden oran) ========== */
-function DonutChart({ title, delivered, remaining, stock=0, baslayanYasam=0, size=180, stroke=28 }) {
-  const total = delivered + remaining; // sadece satılanlar
-  const deliveredPct = total ? delivered/total : 0;
-  const remainingPct = total ? remaining/total : 0;
-  const radius=(size-stroke)/2, circ=2*Math.PI*radius;
-  const deliveredLen=circ*deliveredPct, remainingLen=circ*remainingPct;
+/** ========== Donut Grafik (eski format) ========== */
+function DonutChart({ title, delivered=0, remaining=0, stock=0, baslayanYasam=0, size=160, stroke=24 }) {
+  const d = Number(delivered)||0;
+  const r = Number(remaining)||0;
+  const sold = d + r;                 // Satılan
+  const pct = sold ? d / sold : 0;
+  const radius=(size-stroke)/2;
+  const circ=2*Math.PI*radius;
+  const greenLen=circ*pct;
+  const blueLen=circ-greenLen;
+
+  const green="#198754";
+  const blue="#0d6efd";
+  const track="#e9ecef";
+
+  const pctTxtDelivered = sold ? Math.round((d/sold)*100) : 0;
+  const pctTxtRemaining = 100 - pctTxtDelivered;
+
   return (
     <div className="d-flex flex-column align-items-center">
-      <div className="mb-2 fw-semibold text-center">{title}</div>
+      <div className="fw-semibold mb-1">{title}</div>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <g transform={`translate(${size/2},${size/2})`}>
-          <circle r={radius} fill="none" stroke="#e9ecef" strokeWidth={stroke}/>
-          <circle r={radius} fill="none" stroke="#198754" strokeWidth={stroke}
-            strokeDasharray={`${deliveredLen} ${circ-deliveredLen}`} transform="rotate(-90)"/>
-          <circle r={radius} fill="none" stroke="#0d6efd" strokeWidth={stroke}
-            strokeDasharray={`${remainingLen} ${circ-remainingLen}`} transform={`rotate(${deliveredPct*360-90})`}/>
-          <text x="0" y="-8" textAnchor="middle" fontSize="15" fontWeight="600" fill="#212529">Satılan: {total}</text>
-          <text x="0" y="14" textAnchor="middle" fontSize="12" fill="#6c757d">Teslim / Kalan</text>
+          {/* Gri zemin */}
+          <circle r={radius} fill="none" stroke={track} strokeWidth={stroke} />
+          {/* Teslim (yeşil) */}
+          <circle r={radius} fill="none" stroke={green} strokeWidth={stroke}
+                  strokeDasharray={`${greenLen} ${circ-greenLen}`} transform="rotate(-90)" />
+          {/* Kalan (mavi) */}
+          <circle r={radius} fill="none" stroke={blue} strokeWidth={stroke}
+                  strokeDasharray={`${blueLen} ${circ-blueLen}`} transform={`rotate(${pct*360-90})`} />
+          {/* Merkez metin */}
+          <text x="0" y="-2" textAnchor="middle" fontSize="14" fontWeight="700" fill="#111">
+            Satılan: {sold}
+          </text>
+          <text x="0" y="14" textAnchor="middle" fontSize="11" fill="#6c757d">
+            Teslim / Kalan
+          </text>
         </g>
       </svg>
-      <div className="d-flex flex-column gap-1 mt-2 small text-center">
-        <span className="d-inline-flex align-items-center justify-content-center">
-          <span style={{width:10,height:10,background:"#198754",display:"inline-block",borderRadius:2}} className="me-1"/>
-          Teslim: {delivered} ({total?Math.round(delivered/total*100):0}%)
-        </span>
-        <span className="d-inline-flex align-items-center justify-content-center">
-          <span style={{width:10,height:10,background:"#0d6efd",display:"inline-block",borderRadius:2}} className="me-1"/>
-          Kalan: {remaining} ({total?Math.round(remaining/total*100):0}%)
-        </span>
-        <span className="text-muted">Stok: {stock}</span>
-        <span className="text-muted">Başlayan Yaşam: {baslayanYasam}</span>
+      {/* Legend */}
+      <div className="mt-2 small">
+        <div><span className="legend-dot" style={{background:"#198754"}}></span>Teslim: {d} ({pctTxtDelivered}%)</div>
+        <div><span className="legend-dot" style={{background:"#0d6efd"}}></span>Kalan: {r} ({pctTxtRemaining}%)</div>
       </div>
+      <div className="small text-muted mt-1">Stok: {stock}</div>
+      <div className="small text-muted">Başlayan Yaşam: {baslayanYasam}</div>
     </div>
   );
 }
 
-/** ========== Şema ve izinli alanlar ========== */
+/** ========== Normalizasyonlar & yardımcılar ========== */
+const isSold = (r)=>Boolean((r.musteri && String(r.musteri).trim()) || r.satis_tarihi);
+const isDelivered = (r)=> String(r.teslim_durumu||"").toLowerCase().includes("teslim edildi");
+const isRejected = (r)=> String(r.teslim_durumu||"").toLowerCase().includes("teslim reddedildi");
+const statusEq = (r, text)=> ((r?.teslim_durumu || "").toLowerCase() === text.toLowerCase());
+const normVarYok = (v)=>{ const s=(v||"").toLowerCase(); if(!s) return "Yok"; if(s.includes("var")) return "Var"; if(s.includes("yok")) return "Yok"; return "Yok"; };
+const normTapu = (v)=>{ const s=(v||"").toString().trim(); return s || "Devredilmedi"; };
+const normSuzmeTakildi = (v)=>{ const s=String(v||"").toLowerCase(); return s.includes("takıldı")||s.includes("takildi"); };
+function demirbasState(v){ const s=String(v||"").toLowerCase(); if(s.includes("ödendi")) return "odendi"; if(s.includes("ödenmedi")) return "odenmedi"; return "none"; }
+function formatMoney(v){ if(v===null||v===undefined||v==="") return "-"; const n=Number(v); return Number.isNaN(n)?String(v):n.toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2})+" ₺"; }
+
+/** ========== Girdi/oku yardımcıları ========== */
 const SCHEMA_TYPES = {
   daire:"text", created_at:"timestamp", mal_sahibi:"text", durum:"text",
   blok:"text", no:"int", kat:"int", tip:"text", cephe:"text",
@@ -115,75 +166,33 @@ const SCHEMA_TYPES = {
   demirbas:"numeric", aidat:"numeric",
   demirbas_odeme_durumu:"text",
   kdv_muafiyeti:"text", ipotek_durumu:"text", tapu_durumu:"text",
-  suzme_sayac:"text" // "takıldı" | "takılmadı"
+  suzme_sayac:"text"
 };
-const ALLOW_EDIT_FIELDS = new Set([
-  "teslim_randevu_tarihi",
-  "teslim_randevu_saati",
-  "teslim_durumu",
-  "teslim_notu",
-  "demirbas_odeme_durumu",
-]);
+const ALLOW_EDIT_FIELDS = new Set(["teslim_randevu_tarihi","teslim_randevu_saati","teslim_durumu","teslim_notu","demirbas_odeme_durumu"]);
 
-/** ========== Tip dönüştürücü ========== */
-function coerceValue(field, value) {
-  const t = SCHEMA_TYPES[field] || "text";
-  if (value === "" || value === null || value === undefined) return null;
-  switch (t) {
-    case "int": {
-      const n = parseInt(String(value).replace(",", "."), 10);
-      return Number.isNaN(n) ? null : n;
-    }
-    case "numeric": {
-      const n = parseFloat(String(value).replace(/\./g, "").replace(",", "."));
-      return Number.isNaN(n) ? null : n;
-    }
-    case "date":
-      return String(value);
+function toInputValue(type, value){
+  switch(type){
+    case "date": return value? String(value).slice(0,10):"";
     case "time": {
-      const s = String(value);
-      if (/^\d{2}:\d{2}:\d{2}$/.test(s)) return s;
-      if (/^\d{1,2}:\d{2}$/.test(s)) return s.padStart(5, "0") + ":00";
-      return null;
+      const s = value? String(value).slice(0,5):"";
+      if (/^\d{2}:\d{2}$/.test(s)) return s;
+      if (/^\d{1}:\d{2}$/.test(s)) return `0${s}`;
+      return "";
     }
+    case "numeric":
+    case "int":
+      return value ?? "";
     case "timestamp":
-      return String(value);
+      return String(value ?? "");
     default:
-      return String(value);
+      return String(value ?? "");
   }
 }
-
-/** ========== Normalizasyonlar & yardımcılar ========== */
-const isSold = (r)=>Boolean((r.musteri && String(r.musteri).trim()) || r.satis_tarihi);
-const isDelivered = (r)=>{ const d=(r.teslim_durumu||"").toLowerCase(); return d.includes("teslim edildi"); };
-const statusEq = (r, text)=> ((r?.teslim_durumu || "").toLowerCase() === text.toLowerCase());
-const normVarYok = (v)=>{ const s=(v||"").toLowerCase(); if(!s) return "Yok"; if(s.includes("var")) return "Var"; if(s.includes("yok")) return "Yok"; return "Yok"; };
-const normTapu = (v)=>{ const s=(v||"").toString().trim(); return s || "Devredilmedi"; };
-const normSuzmeTakildi = (v)=>{ const s=(v||"").toLowerCase(); return s.includes("takıldı")||s.includes("takildi"); };
-function demirbasState(v){
-  const s=(v||"").toLowerCase().trim();
-  if (s.includes("ödenmedi")) return "odenmedi";
-  if (s.includes("ödendi")) return "odendi";
-  return "none";
-}
-function prettySuzme(v){
-  if (v === null || v === undefined || v === "") return "-";
-  return normSuzmeTakildi(v) ? "Takıldı" : "Takılmadı";
-}
-
-// Türkçe güvenli slug
-function slugify(s){
-  let x = String(s||"").toLowerCase();
-  x = x.normalize("NFD").replace(/[\u0300-\u036f]/g,"");
-  x = x
-    .replace(/ı/g,"i").replace(/ş/g,"s").replace(/ç/g,"c")
-    .replace(/ğ/g,"g").replace(/ö/g,"o").replace(/ü/g,"u");
-  x = x.replace(/[^a-z0-9]+/g,"").trim();
-  return x;
-}
-function matchPatterns(value, patterns){
-  const sv = slugify(value);
-  return patterns.some(p => sv.includes(slugify(p)));
+function readOnlyCell(type, value){
+  if(type==="date") return <span>{value? String(value).slice(0,10):"-"}</span>;
+  if(type==="time") return <span>{value? String(value).slice(0,5):"-"}</span>;
+  if(type==="numeric") return <span>{formatMoney(value)}</span>;
+  return <span>{value ?? "-"}</span>;
 }
 
 /** ========== App ========== */
@@ -201,6 +210,9 @@ export default function App(){
   const [notice,setNotice]=useState("");
   const pkRef=useMemo(()=>selected?selected.daire:null,[selected]);
 
+  /** Takvim: tek mod (day|week) */
+  const [viewMode,setViewMode]=useState("day");
+  const [currentDate,setCurrentDate]=useState(()=>clampBusinessDay(new Date()));
   const [currentWeekStart,setCurrentWeekStart]=useState(()=>startOfWeek(new Date()));
   const weekDays=useMemo(()=>weekdaysOfWeek(currentWeekStart),[currentWeekStart]);
 
@@ -212,12 +224,17 @@ export default function App(){
       if(!res.ok) throw new Error(`Yükleme hatası: ${res.status} ${res.statusText}`);
       const data=await res.json();
       data.sort((a,b)=>{
-        const ab=(a.blok||"").toUpperCase(), bb=(b.blok||"").toUpperCase();
-        if(ab===bb){ const an=Number.isFinite(a.no)?a.no:parseInt(a.no,10)||0; const bn=Number.isFinite(b.no)?b.no:parseInt(b.no,10)||0; return an-bn; }
+        const ab=(a.blok||"").toUpperCase();
+        const bb=(b.blok||"").toUpperCase();
+        if(ab===bb){
+          const an=Number.isFinite(a.no)?a.no:parseInt(a.no,10)||0;
+          const bn=Number.isFinite(b.no)?b.no:parseInt(b.no,10)||0;
+          return an-bn;
+        }
         return ab.localeCompare(bb,"tr");
       });
       setRows(data);
-      if(selected){
+      if (selected) {
         const again=data.find(r=>r.daire===selected.daire);
         setSelected(again||null);
         setEdit(again?{...again}:{});
@@ -225,7 +242,7 @@ export default function App(){
     }catch(e){ setErr(e.message); }
     finally{ setLoading(false); }
   }
-  useEffect(()=>{ fetchAll(); },[]);
+  useEffect(()=>{ fetchAll(); /* eslint-disable-next-line */ },[]);
 
   /** ---- Filtre ---- */
   const filtered=useMemo(()=>{
@@ -234,7 +251,7 @@ export default function App(){
     return rows.filter(r=>{
       const daire=(r.daire||"").toLowerCase();
       const blok=(r.blok||"").toLowerCase();
-      const no=(r.no??"").toString().toLowerCase();
+      const no=String(r.no||"").toLowerCase();
       const musteri=(r.musteri||"").toLowerCase();
       const malSahibi=(r.mal_sahibi||"").toLowerCase();
       const combo1=`${blok}${no}`, combo2=`${blok}-${no}`;
@@ -250,24 +267,32 @@ export default function App(){
     });
   },[rows,search]);
 
-  /** ---- Takvim ---- */
-  const appointmentsByDay=useMemo(()=>{
+  /** ---- Randevular ---- */
+  function getAppointmentsFor(date){
+    const key=toISODate(date);
+    const arr=rows.filter(r=>r.teslim_randevu_tarihi===key);
+    arr.sort((a,b)=>(a.teslim_randevu_saati||"").localeCompare(b.teslim_randevu_saati||""));
+    return arr;
+  }
+  const appointmentsByDayInWeek=useMemo(()=>{
     const map={}; weekDays.forEach(d=>map[toISODate(d)]=[]);
-    rows.forEach(r=>{ if(!r.teslim_randevu_tarihi) return; const key=r.teslim_randevu_tarihi; if(map[key]) map[key].push(r); });
+    rows.forEach(r=>{
+      const k=r.teslim_randevu_tarihi;
+      if(k && map[k]) map[k].push(r);
+    });
     Object.keys(map).forEach(k=>map[k].sort((a,b)=>(a.teslim_randevu_saati||"").localeCompare(b.teslim_randevu_saati||"")));
     return map;
   },[rows,weekDays]);
 
-  /** ---- Gruplar (mal_sahibi) & Donut istatistikleri ---- */
+  /** ---- Gruplar & Donut verileri ---- */
   const rowsOwner24 = useMemo(
-    ()=>rows.filter(r=>matchPatterns(r.mal_sahibi, ["24 gayrimenkul","24-gayrimenkul"])),
+    ()=>rows.filter(r=>/(^|\s)24\s*gayrimenkul/i.test(r.mal_sahibi||"")),
     [rows]
   );
   const rowsOwnerArsa = useMemo(
-    ()=>rows.filter(r=>matchPatterns(r.mal_sahibi, ["arsa sahibi","arsasahibi","güneşli proje","gunesli proje"])),
+    ()=>rows.filter(r=>(/(arsa\s*sahibi|g[üu]ne[sş]li\s*proje)/i).test(r.mal_sahibi||"")),
     [rows]
   );
-
   const groupStats=(groupRows)=>{
     const sold=groupRows.filter(isSold);
     const delivered=sold.filter(isDelivered).length;
@@ -286,73 +311,34 @@ export default function App(){
       method:"PATCH", headers:REST_HEADERS, body:JSON.stringify(body)
     });
     if(!res.ok){
-      let txt="";
-      try{ txt=await res.text(); }catch{}
+      let txt=""; try{ txt=await res.text(); }catch{}
       throw new Error(`Güncelleme hatası: ${res.status} ${res.statusText} ${txt}`);
     }
   }
+  async function markDelivered(r){ if(!r?.daire||statusEq(r,"teslim edildi")) return; await patchByDaire(r.daire,{teslim_durumu:"Teslim Edildi"}); fetchAll(); }
+  async function markUndelivered(r){ if(!r?.daire||statusEq(r,"teslim edilmedi")) return; await patchByDaire(r.daire,{teslim_durumu:"Teslim Edilmedi"}); fetchAll(); }
+  async function markRejected(r){ if(!r?.daire||statusEq(r,"teslim reddedildi")) return; await patchByDaire(r.daire,{teslim_durumu:"Teslim Reddedildi"}); fetchAll(); }
+  async function setDemirbas(r,ok){ if(!r?.daire) return; const st=demirbasState(r.demirbas_odeme_durumu); if((ok&&st==="odendi")||(!ok&&st==="odenmedi")) return; await patchByDaire(r.daire,{demirbas_odeme_durumu: ok?"Ödendi":"Ödenmedi"}); fetchAll(); }
+  async function setSuzme(r,t){ if(!r?.daire) return; const cur=normSuzmeTakildi(r.suzme_sayac); if((t&&cur)||(!t&&!cur)) return; await patchByDaire(r.daire,{suzme_sayac: t?"takıldı":"takılmadı"}); fetchAll(); }
 
-  /** ---- HERKES: Teslim statüleri ---- */
-  async function markDelivered(r){
-    if(!r?.daire) return;
-    if(statusEq(r,"teslim edildi")) return;
-    try{ await patchByDaire(r.daire,{teslim_durumu:"Teslim Edildi"}); await fetchAll(); }
-    catch(e){ alert("Güncelleme başarısız: "+e.message); }
-  }
-  async function markUndelivered(r){
-    if(!r?.daire) return;
-    if(statusEq(r,"teslim edilmedi")) return;
-    try{ await patchByDaire(r.daire,{teslim_durumu:"Teslim Edilmedi"}); await fetchAll(); }
-    catch(e){ alert("Güncelleme başarısız: "+e.message); }
-  }
-  async function markRejected(r){
-    if(!r?.daire) return;
-    if(statusEq(r,"teslim reddedildi")) return;
-    try{ await patchByDaire(r.daire,{teslim_durumu:"Teslim Reddedildi"}); await fetchAll(); }
-    catch(e){ alert("Güncelleme başarısız: "+e.message); }
-  }
-
-  /** ---- HERKES: Demirbaş Ödendi / Ödenmedi ---- */
-  async function setDemirbas(r,ok){
-    if(!r?.daire) return;
-    const state=demirbasState(r.demirbas_odeme_durumu);
-    if((ok && state==="odendi") || (!ok && state==="odenmedi")) return;
-    try{ await patchByDaire(r.daire,{demirbas_odeme_durumu: ok?"Ödendi":"Ödenmedi"}); await fetchAll(); }
-    catch(e){ alert("Güncelleme başarısız: "+e.message); }
-  }
-
-  /** ---- HERKES: Süzme sayaç Takıldı / Takılmadı ---- */
-  async function setSuzme(r,takildi){
-    if(!r?.daire) return;
-    const cur=normSuzmeTakildi(r.suzme_sayac);
-    if((takildi && cur) || (!takildi && !cur)) return;
-    try{ await patchByDaire(r.daire,{suzme_sayac: takildi?"takıldı":"takılmadı"}); await fetchAll(); }
-    catch(e){ alert("Güncelleme başarısız: "+e.message); }
-  }
-
-  /** ---- Admin giriş/çıkış ---- */
+  /** ---- Admin ---- */
   function handleLogin(){
     if(isAdmin){ setIsAdmin(false); window.localStorage.removeItem("tp_admin"); return; }
     const code=window.prompt("Giriş kodu:");
     if(code===ADMIN_CODE){ setIsAdmin(true); window.localStorage.setItem("tp_admin","1"); }
     else if(code!==null){ alert("Kod hatalı."); }
   }
-
-  /** ---- Inline edit ---- */
-  useEffect(()=>{ setEdit(selected?{...selected}:{}) },[selected]);
+  useEffect(()=>{ setEdit(selected?{...selected}:{}); },[selected]);
   function onEditChange(field,value){ setEdit(p=>({...p,[field]:value})); }
   function isLocked(field){ if(field==="created_at") return true; if(!isAdmin) return true; return !ALLOW_EDIT_FIELDS.has(field); }
-
-  /** ---- Kaydet ---- */
   async function handleSave(){
     if(!isAdmin||!selected) return;
-    const original=selected, changed={};
-    Object.keys(SCHEMA_TYPES).forEach((k)=>{
-      if(!(k in original)&&!(k in edit)) return;
+    const changed={};
+    Object.keys(SCHEMA_TYPES).forEach(k=>{
+      if(!(k in selected) && !(k in edit)) return;
       if(isLocked(k)) return;
-      const orig=original[k]??null, nv=coerceValue(k,edit[k]??null);
-      const os=orig===null?null:String(orig), ns=nv===null?null:String(nv);
-      if(os!==ns) changed[k]=nv;
+      const ov=selected[k]??null, nv=edit[k]??null;
+      if(String(ov??"")!==String(nv??"")) changed[k]=nv;
     });
     if(Object.keys(changed).length===0) return;
     try{
@@ -398,82 +384,180 @@ export default function App(){
               {listToShow.length===0 && <div className="p-3 text-muted small">Kayıt bulunamadı.</div>}
               <ul className="list-group list-group-flush">
                 {listToShow.map(r=>{
-                  const delivered=isDelivered(r), active=selected?.daire===r.daire;
+                  const delivered=isDelivered(r);
+                  const rejected=isRejected(r);
+                  const demSt=demirbasState(r.demirbas_odeme_durumu);
+                  const active=selected?.daire===r.daire;
+                  const classes = [
+                    "list-group-item",
+                    "d-flex","justify-content-between","align-items-center",
+                    rejected ? "rejected" : (delivered ? "delivered" : ""),
+                    active ? "border-primary" : ""
+                  ].join(" ").replace(/\s+/g," ").trim();
+
                   return (
-                    <li key={r.daire||`${r.blok}-${r.no}`} className={`list-group-item d-flex justify-content-between align-items-center ${active?"active":""}`}
-                      role="button" onClick={()=>setSelected(r)}
-                      style={{background:active?undefined:delivered?"#e8fbf2":undefined,color:active?undefined:delivered?"#157347":undefined}}
-                      title={r.daire||`${r.blok}-${r.no}`}>
+                    <li key={r.daire||`${r.blok}-${r.no}`}
+                        className={classes}
+                        onClick={()=>setSelected(r)}
+                        title={r.daire||`${r.blok}-${r.no}`}>
                       <div className="d-flex flex-column">
                         <span className="fw-semibold">{r.daire||`${r.blok}-${r.no}`}</span>
                         <span className="small text-muted">{r.musteri||r.mal_sahibi||"-"}</span>
                       </div>
-                      <span className={`badge ${delivered?"bg-success":"bg-secondary"}`}>{r.teslim_durumu||"Durum Yok"}</span>
+                      <div className="d-flex flex-column align-items-end">
+                        <span className={`badge ${delivered ? "bg-success" : "bg-secondary"} mb-1`}>{r.teslim_durumu||"Durum Yok"}</span>
+                        {demSt==="odendi" && <span className="badge bg-success">Demirbaş Ödendi</span>}
+                        {demSt==="odenmedi" && <span className="badge bg-danger">Demirbaş Ödenmedi</span>}
+                        {demSt==="none" && <span className="badge bg-secondary">— Demirbaş</span>}
+                      </div>
                     </li>
                   );
                 })}
               </ul>
-              {!search.trim() && filtered.length>5 && (
-                <div className="p-2 d-flex justify-content-center">
-                  <button className="btn btn-sm btn-outline-primary" onClick={()=>setShowAllList(s=>!s)}>{showAllList?"Daha Az Göster":"Hepsini Göster"}</button>
+
+              {/* Hepsini Göster / Daha Az */}
+              {search.trim()==="" && filtered.length>5 && (
+                <div className="p-2 text-center">
+                  <button className="btn btn-sm btn-outline-primary" onClick={()=>setShowAllList(s=>!s)}>
+                    {showAllList?"Daha Az Göster":"Hepsini Göster"}
+                  </button>
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* ORTA: Takvim + Daire Özeti */}
+        {/* ORTA: Navigasyon (takvimin hemen üstünde) + Takvim */}
         <div className="col-12 col-lg-7">
-          <div className="card h-100">
-            <div className="card-header d-flex justify-content-between align-items-center py-2">
-              <div className="btn-group btn-group-sm">
-                <button className="btn btn-outline-primary" onClick={()=>setCurrentWeekStart(addDays(currentWeekStart,-7))}>← Önceki</button>
-                <button className="btn btn-outline-secondary" onClick={()=>setCurrentWeekStart(startOfWeek(new Date()))}>Bugün</button>
-                <button className="btn btn-outline-primary" onClick={()=>setCurrentWeekStart(addDays(currentWeekStart,7))}>Sonraki →</button>
-              </div>
-              <div className="small text-muted">
-                {formatTRDate(weekDays[0])} – {formatTRDate(weekDays[weekDays.length-1])}
-              </div>
+          {/* Navigasyon — ÖN GÖSTERİM METNİ YOK */}
+          <div className="mb-2 d-flex flex-wrap align-items-center gap-2">
+            {/* Gün */}
+            <div className="btn-group btn-group-sm me-2">
+              <button className="btn btn-outline-primary" onClick={()=>{ setViewMode("day"); setCurrentDate(d=>addBusinessDays(clampBusinessDay(d),-1)); }}>
+                ← Önceki Gün
+              </button>
+              <button className={`btn btn-outline-${viewMode==="day"?"secondary":"primary"}`} onClick={()=>{ setViewMode("day"); setCurrentDate(clampBusinessDay(new Date())); }}>
+                Bugün
+              </button>
+              <button className="btn btn-outline-primary" onClick={()=>{ setViewMode("day"); setCurrentDate(d=>addBusinessDays(clampBusinessDay(d),+1)); }}>
+                Sonraki Gün →
+              </button>
             </div>
+            {/* Hafta */}
+            <div className="btn-group btn-group-sm">
+              <button className="btn btn-outline-primary" onClick={()=>{ setViewMode("week"); setCurrentWeekStart(ws=>addDays(ws,-7)); }}>
+                ← Önceki Hafta
+              </button>
+              <button className={`btn btn-outline-${viewMode==="week"?"secondary":"primary"}`} onClick={()=>{ setViewMode("week"); setCurrentWeekStart(startOfWeek(new Date())); }}>
+                Bu Hafta
+              </button>
+              <button className="btn btn-outline-primary" onClick={()=>{ setViewMode("week"); setCurrentWeekStart(ws=>addDays(ws,7)); }}>
+                Sonraki Hafta →
+              </button>
+            </div>
+          </div>
 
+          <div className="card h-100">
+            <div className="card-header py-2"><strong>Takvim</strong></div>
             <div className="card-body">
-              {/* Günler */}
-              <div className="d-flex flex-column gap-3">
-                {weekDays.map(d=>{
-                  const key=toISODate(d), items=appointmentsByDay[key]||[];
-                  const weekday=d.toLocaleDateString("tr-TR",{weekday:"long"});
+              {viewMode==="day" ? (
+                /** --- Gün: tek kutu (iş günü) --- */
+                (() => {
+                  const d = clampBusinessDay(currentDate);
+                  const items = getAppointmentsFor(d);
                   return (
-                    <div key={key} className="day-box rounded">
+                    <div className="day-box">
                       <div className="day-head">
-                        <span className="day-pill">{weekday}<span className="day-date ms-2">{formatTRDate(d)}</span></span>
+                        <span className="day-pill">
+                          {d.toLocaleDateString("tr-TR",{weekday:"long"})}
+                          <span className="day-date ms-2">{formatTRDate(d)}</span>
+                        </span>
                       </div>
                       <div className="p-2">
-                        {items.length===0 ? <div className="text-muted small">Randevu yok</div> : (
+                        {items.length===0 ? (
+                          <div className="small text-muted">Randevu yok</div>
+                        ) : (
                           <div className="d-flex flex-column gap-2">
-                            {items.map(r=>(
-                              <div key={`${r.daire}-${r.teslim_randevu_saati||"x"}`} className="appt p-2 rounded" role="button" onClick={()=>setSelected(r)}>
-                                <div className="d-flex justify-content-between">
-                                  <span className="fw-semibold">{r.daire||`${r.blok}-${r.no}`}</span>
-                                  <span className="badge bg-primary">{r.teslim_randevu_saati?formatTimeStr(r.teslim_randevu_saati):"—"}</span>
+                            {items.map(r=>{
+                              const delivered=isDelivered(r);
+                              const rejected=isRejected(r);
+                              const classes = `appt p-2 ${rejected?"rejected":(delivered?"delivered":"")}`;
+                              return (
+                                <div key={`${toISODate(d)}-${r.daire}-${r.teslim_randevu_saati||"x"}`}
+                                     className={classes}
+                                     onClick={()=>setSelected(r)}>
+                                  <div className="d-flex justify-content-between">
+                                    <span className="fw-semibold">{r.daire||`${r.blok}-${r.no}`}</span>
+                                    <span className="badge bg-primary">{formatTimeStr(r.teslim_randevu_saati)||"—"}</span>
+                                  </div>
+                                  <div className="small text-muted d-flex flex-wrap gap-2 mt-1">
+                                    <span>{r.musteri||r.mal_sahibi||"-"} • {r.teslim_durumu||"Durum Yok"}</span>
+                                    {(() => {
+                                      const st = demirbasState(r.demirbas_odeme_durumu);
+                                      if (st === "odendi") return <span className="badge bg-success">✓ Demirbaş: Ödendi</span>;
+                                      if (st === "odenmedi") return <span className="badge bg-danger">✗ Demirbaş: Ödenmedi</span>;
+                                      return <span className="badge bg-secondary">— Demirbaş</span>;
+                                    })()}
+                                  </div>
                                 </div>
-                                <div className="small text-muted d-flex flex-wrap align-items-center gap-2">
-                                  <span>{(r.musteri||r.mal_sahibi||"-")} • {(r.teslim_durumu||"Durum Yok")}</span>
-                                  {(() => { // Demirbaş rozeti her randevuda
-                                    const st = demirbasState(r.demirbas_odeme_durumu);
-                                    if (st === "odendi") return <span className="badge bg-success">✓ Demirbaş: Ödendi</span>;
-                                    if (st === "odenmedi") return <span className="badge bg-danger">✗ Demirbaş: Ödenmedi</span>;
-                                    return <span className="badge bg-secondary">— Demirbaş</span>;
-                                  })()}
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         )}
                       </div>
                     </div>
                   );
-                })}
-              </div>
+                })()
+              ) : (
+                /** --- Hafta: Pzt–Cum 5 gün --- */
+                <div className="d-flex flex-column gap-3">
+                  {weekDays.map(d=>{
+                    const key=toISODate(d), items=(appointmentsByDayInWeek[key]||[]);
+                    return (
+                      <div key={key} className="day-box">
+                        <div className="day-head">
+                          <span className="day-pill">
+                            {d.toLocaleDateString("tr-TR",{weekday:"long"})}
+                            <span className="day-date ms-2">{formatTRDate(d)}</span>
+                          </span>
+                        </div>
+                        <div className="p-2">
+                          {items.length===0 ? (
+                            <div className="small text-muted">Randevu yok</div>
+                          ) : (
+                            <div className="d-flex flex-column gap-2">
+                              {items.map(r=>{
+                                const delivered=isDelivered(r);
+                                const rejected=isRejected(r);
+                                const classes = `appt p-2 ${rejected?"rejected":(delivered?"delivered":"")}`;
+                                return (
+                                  <div key={`${key}-${r.daire}-${r.teslim_randevu_saati||"x"}`}
+                                       className={classes}
+                                       onClick={()=>setSelected(r)}>
+                                    <div className="d-flex justify-content-between">
+                                      <span className="fw-semibold">{r.daire||`${r.blok}-${r.no}`}</span>
+                                      <span className="badge bg-primary">{formatTimeStr(r.teslim_randevu_saati)||"—"}</span>
+                                    </div>
+                                    <div className="small text-muted d-flex flex-wrap gap-2 mt-1">
+                                      <span>{r.musteri||r.mal_sahibi||"-"} • {r.teslim_durumu||"Durum Yok"}</span>
+                                      {(() => {
+                                        const st = demirbasState(r.demirbas_odeme_durumu);
+                                        if (st === "odendi") return <span className="badge bg-success">✓ Demirbaş: Ödendi</span>;
+                                        if (st === "odenmedi") return <span className="badge bg-danger">✗ Demirbaş: Ödenmedi</span>;
+                                        return <span className="badge bg-secondary">— Demirbaş</span>;
+                                      })()}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               {/* Seçili daire özeti */}
               <div className="mt-4">
@@ -481,45 +565,34 @@ export default function App(){
                   <span>Daire Özeti</span>
                   {selected && (
                     <span className="d-flex flex-wrap gap-2">
-                      <button className="btn btn-sm btn-outline-success"
-                        onClick={()=>markDelivered(selected)}
-                        disabled={statusEq(selected,"teslim edildi")}
-                        title='Durumu "Teslim Edildi" yap'>
-                        Teslim Edildi
-                      </button>
-                      <button className="btn btn-sm btn-outline-danger"
-                        onClick={()=>markUndelivered(selected)}
-                        disabled={statusEq(selected,"teslim edilmedi")}
-                        title='Durumu "Teslim Edilmedi" yap'>
-                        Teslim Edilmedi
-                      </button>
-                      <button className="btn btn-sm btn-outline-warning"
-                        onClick={()=>markRejected(selected)}
-                        disabled={statusEq(selected,"teslim reddedildi")}
-                        title='Durumu "Teslim Reddedildi" yap'>
-                        Teslim Reddedildi
-                      </button>
+                      <button className="btn btn-sm btn-outline-success" onClick={()=>markDelivered(selected)} disabled={statusEq(selected,"teslim edildi")}>Teslim Edildi</button>
+                      <button className="btn btn-sm btn-outline-danger" onClick={()=>markUndelivered(selected)} disabled={statusEq(selected,"teslim edilmedi")}>Teslim Edilmedi</button>
+                      <button className="btn btn-sm btn-outline-warning" onClick={()=>markRejected(selected)} disabled={statusEq(selected,"teslim reddedildi")}>Teslim Reddedildi</button>
                     </span>
                   )}
                 </h2>
 
                 {!selected ? (
-                  <div className="text-muted small">Soldan veya takvimden bir daire seçiniz.</div>
+                  <div className="text-muted small">Soldan liste veya takvimden bir daire seçiniz.</div>
                 ) : (
                   <div className="table-responsive">
                     <table className="table table-sm align-middle">
                       <tbody>
                         <tr>
-                          <th colSpan={2}><div className="fs-5 fw-bold text-primary">{selected.daire || `${selected.blok}-${selected.no}`}</div></th>
+                          <th colSpan={2}>
+                            <div className="fs-5 fw-bold text-primary">{selected.daire||`${selected.blok}-${selected.no}`}</div>
+                          </th>
                         </tr>
-
-                        {/* 1) Randevu + Kaydet */}
                         <tr>
                           <th>Randevu Tarihi / Saati</th>
                           <td>
                             <div className="d-flex gap-2 flex-wrap align-items-center">
-                              {inputFor("teslim_randevu_tarihi", edit, onEditChange, "date", isLockedGlobal("teslim_randevu_tarihi"))}
-                              {inputFor("teslim_randevu_saati", edit, onEditChange, "time", isLockedGlobal("teslim_randevu_saati"))}
+                              <input className="form-control form-control-sm" type="date"
+                                     value={toInputValue("date", edit.teslim_randevu_tarihi)}
+                                     onChange={(e)=>onEditChange("teslim_randevu_tarihi", e.target.value)} disabled={isLocked("teslim_randevu_tarihi")} />
+                              <input className="form-control form-control-sm" type="time"
+                                     value={toInputValue("time", edit.teslim_randevu_saati)}
+                                     onChange={(e)=>onEditChange("teslim_randevu_saati", e.target.value)} disabled={isLocked("teslim_randevu_saati")} />
                               {isAdmin && (
                                 <span className="ms-auto d-flex align-items-center gap-2">
                                   <button className="btn btn-sm btn-primary" onClick={handleSave}>Kaydet</button>
@@ -529,16 +602,30 @@ export default function App(){
                             </div>
                           </td>
                         </tr>
-
-                        {/* 2) Teslim Durumu */}
-                        {renderRow("Teslim Durumu","teslim_durumu",edit,onEditChange)}
-                        {/* 3) Not */}
-                        {renderRow("Not","teslim_notu",edit,onEditChange)}
-                        {/* 4) Demirbaş / Aidat (sabit) */}
-                        {renderRowLocked("Demirbaş","demirbas",edit)}
-                        {renderRowLocked("Aidat","aidat",edit)}
-
-                        {/* 5) Demirbaş Ödeme */}
+                        <tr>
+                          <th>Teslim Durumu</th>
+                          <td>
+                            <input className="form-control form-control-sm" type="text"
+                                   value={toInputValue("text", edit.teslim_durumu)}
+                                   onChange={(e)=>onEditChange("teslim_durumu", e.target.value)} disabled={isLocked("teslim_durumu")} />
+                          </td>
+                        </tr>
+                        <tr>
+                          <th>Not</th>
+                          <td>
+                            <input className="form-control form-control-sm" type="text"
+                                   value={toInputValue("text", edit.teslim_notu)}
+                                   onChange={(e)=>onEditChange("teslim_notu", e.target.value)} disabled={isLocked("teslim_notu")} />
+                          </td>
+                        </tr>
+                        <tr>
+                          <th>Demirbaş</th>
+                          <td>{readOnlyCell("numeric", selected.demirbas)}</td>
+                        </tr>
+                        <tr>
+                          <th>Aidat</th>
+                          <td>{readOnlyCell("numeric", selected.aidat)}</td>
+                        </tr>
                         <tr>
                           <th>Demirbaş Ödeme</th>
                           <td className="d-flex align-items-center gap-2 flex-wrap">
@@ -554,18 +641,14 @@ export default function App(){
                             })()}
                           </td>
                         </tr>
-
-                        {/* 6) Başlayan Yaşam (Süzme Sayaç) */}
                         <tr>
                           <th>Başlayan Yaşam (Süzme Sayaç)</th>
                           <td className="d-flex align-items-center gap-2 flex-wrap">
-                            <span>{prettySuzme(selected.suzme_sayac)}</span>
+                            <span>{selected.suzme_sayac ? (normSuzmeTakildi(selected.suzme_sayac)?"Takıldı":"Takılmadı") : "-"}</span>
                             <button className="btn btn-sm btn-outline-success" onClick={()=>setSuzme(selected,true)} disabled={normSuzmeTakildi(selected.suzme_sayac)}>Takıldı</button>
                             <button className="btn btn-sm btn-outline-danger" onClick={()=>setSuzme(selected,false)} disabled={!normSuzmeTakildi(selected.suzme_sayac)}>Takılmadı</button>
                           </td>
                         </tr>
-
-                        {/* Diğer bilgiler – derli toplu ızgara */}
                         <tr>
                           <th colSpan={2}>
                             <div className="kv mt-1">
@@ -598,16 +681,18 @@ export default function App(){
           </div>
         </div>
 
-        {/* SAĞ: Donutlar */}
+        {/* SAĞ: Donutlar (eski format) */}
         <div className="col-12 col-lg-2">
           <div className="card h-100">
-            <div className="card-header py-2"><strong>Özet</strong></div>
+            <div className="card-header py-2">
+              <strong>Özet</strong>
+            </div>
             <div className="card-body d-flex flex-column gap-4 align-items-center">
-              <DonutChart title="Toplam" delivered={statsTotal.delivered} remaining={statsTotal.remaining} stock={statsTotal.stock} baslayanYasam={statsTotal.baslayanYasam}/>
+              <DonutChart title="Toplam" {...statsTotal} />
               <div className="w-100" style={{borderTop:"1px dashed #e3e8ef"}}/>
-              <DonutChart title="24 Gayrimenkul" delivered={stats24.delivered} remaining={stats24.remaining} stock={stats24.stock} baslayanYasam={stats24.baslayanYasam}/>
+              <DonutChart title="24 Gayrimenkul" {...stats24} />
               <div className="w-100" style={{borderTop:"1px dashed #e3e8ef"}}/>
-              <DonutChart title="Arsa Sahibi" delivered={statsArsa.delivered} remaining={statsArsa.remaining} stock={statsArsa.stock} baslayanYasam={statsArsa.baslayanYasam}/>
+              <DonutChart title="Arsa Sahibi" {...statsArsa} />
             </div>
           </div>
         </div>
@@ -617,48 +702,3 @@ export default function App(){
     </div>
   );
 }
-
-/** ====== Inline yardımcıları ====== */
-function renderRow(label,field,edit,onEditChange,multi=null){
-  if(multi&&Array.isArray(multi)){
-    return (<tr><th>{label}</th><td><div className="d-flex gap-2 flex-wrap">
-      {multi.map(([f,t])=>(
-        <div key={f} className="d-flex align-items-center gap-2">
-          <span className="small text-muted" style={{minWidth:110}}>{titleCase(f)}</span>
-          {inputFor(f,edit,onEditChange,t,isLockedGlobal(f))}
-        </div>
-      ))}
-    </div></td></tr>);
-  }
-  return (<tr><th>{label}</th><td>{field?inputFor(field,edit,onEditChange,SCHEMA_TYPES[field],isLockedGlobal(field)):<span className="text-muted">—</span>}</td></tr>);
-}
-function renderRowLocked(label,field,edit,multi=null){
-  if(multi&&Array.isArray(multi)){
-    return (<tr><th>{label}</th><td><div className="d-flex gap-2 flex-wrap">
-      {multi.map(([f,t])=>(
-        <div key={f} className="d-flex align-items-center gap-2">
-          <span className="small text-muted" style={{minWidth:110}}>{titleCase(f)}</span>
-          {readOnlyField(edit?.[f],t)}
-        </div>
-      ))}
-    </div></td></tr>);
-  }
-  return (<tr><th>{label}</th><td>{readOnlyField(edit?.[field],SCHEMA_TYPES[field])}</td></tr>);
-}
-function readOnlyField(value,typeHint){
-  if(typeHint==="date") return <span>{value?String(value).slice(0,10):"-"}</span>;
-  if(typeHint==="time") return <span>{value?String(value).slice(0,5):"-"}</span>;
-  if(typeHint==="numeric") return <span>{value===null||value===undefined||value===""?"-":formatMoney(value)}</span>;
-  return <span>{value ?? "-"}</span>;
-}
-function isLockedGlobal(field){ if(field==="created_at") return true; if(!window?.localStorage?.getItem("tp_admin")) return true; return !ALLOW_EDIT_FIELDS.has(field); }
-function inputFor(field,edit,onEditChange,typeHint,lockedForce=false){
-  if(field==="kdv_muafiyeti"||field==="ipotek_durumu"||field==="tapu_durumu"||field==="suzme_sayac"){ return readOnlyField(edit?.[field],SCHEMA_TYPES[field]); }
-  const t=(typeHint||SCHEMA_TYPES[field]||"text"), val=edit?.[field]??"", locked=lockedForce||isLockedGlobal(field);
-  if(t==="date"){ const v=val?String(val).slice(0,10):""; return <input className="form-control form-control-sm" type="date" value={v} onChange={e=>onEditChange(field,e.target.value)} disabled={locked} style={{minWidth:160}}/>; }
-  if(t==="time"){ const v=val?String(val).slice(0,5):""; return <input className="form-control form-control-sm" type="time" value={v} onChange={e=>onEditChange(field,e.target.value)} disabled={locked} style={{minWidth:120}}/>; }
-  if(t==="int"||t==="numeric"){ return <input className="form-control form-control-sm" type="text" value={val??""} onChange={e=>onEditChange(field,e.target.value)} disabled={locked} style={{minWidth:120}} placeholder={t==="int"?"0":"0,00"}/>; }
-  return <input className="form-control form-control-sm" type="text" value={val??""} onChange={e=>onEditChange(field,e.target.value)} disabled={locked} style={{minWidth:200}} placeholder={titleCase(field)}/>;
-}
-function titleCase(s){ return String(s||"").replaceAll("_"," ").replace(/\w\S*/g,t=>t.charAt(0).toUpperCase()+t.slice(1)); }
-function formatMoney(v){ if(v===null||v===undefined||v==="") return "-"; const n=Number(v); if(Number.isNaN(n)) return String(v); return n.toLocaleString("tr-TR",{minimumFractionDigits:2,maximumFractionDigits:2})+" ₺"; }
