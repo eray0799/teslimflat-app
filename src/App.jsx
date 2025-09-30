@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import "bootstrap/dist/css/bootstrap.min.css";
 
 /** ========== Basit Admin Girişi ========== */
-const ADMIN_CODE = "24admin";
+const ADMIN_CODE = "rgelal";
 
 /** ========== Supabase REST ayarları ========== */
 const SUPABASE_URL = "https://boouupvwgkuptzhujsoj.supabase.co";
@@ -565,9 +565,27 @@ export default function App(){
                   <span>Daire Özeti</span>
                   {selected && (
                     <span className="d-flex flex-wrap gap-2">
-                      <button className="btn btn-sm btn-outline-success" onClick={()=>markDelivered(selected)} disabled={statusEq(selected,"teslim edildi")}>Teslim Edildi</button>
-                      <button className="btn btn-sm btn-outline-danger" onClick={()=>markUndelivered(selected)} disabled={statusEq(selected,"teslim edilmedi")}>Teslim Edilmedi</button>
-                      <button className="btn btn-sm btn-outline-warning" onClick={()=>markRejected(selected)} disabled={statusEq(selected,"teslim reddedildi")}>Teslim Reddedildi</button>
+                      <button
+                        className="btn btn-sm btn-outline-success"
+                        onClick={()=>markDelivered(selected)}
+                        disabled={!isAdmin || statusEq(selected,"teslim edildi")}
+                      >
+                        Teslim Edildi
+                      </button>
+                      <button
+                        className="btn btn-sm btn-outline-danger"
+                        onClick={()=>markUndelivered(selected)}
+                        disabled={!isAdmin || statusEq(selected,"teslim edilmedi")}
+                      >
+                        Teslim Edilmedi
+                      </button>
+                      <button
+                        className="btn btn-sm btn-outline-warning"
+                        onClick={()=>markRejected(selected)}
+                        disabled={!isAdmin || statusEq(selected,"teslim reddedildi")}
+                      >
+                        Teslim Reddedildi
+                      </button>
                     </span>
                   )}
                 </h2>
@@ -634,8 +652,20 @@ export default function App(){
                               const st = demirbasState(selected.demirbas_odeme_durumu);
                               return (
                                 <>
-                                  <button className="btn btn-sm btn-outline-success" onClick={()=>setDemirbas(selected,true)} disabled={st==="odendi"}>Ödendi</button>
-                                  <button className="btn btn-sm btn-outline-danger" onClick={()=>setDemirbas(selected,false)} disabled={st==="odenmedi"}>Ödenmedi</button>
+                                  <button
+                                    className="btn btn-sm btn-outline-success"
+                                    onClick={()=>setDemirbas(selected,true)}
+                                    disabled={!isAdmin || st==="odendi"}
+                                  >
+                                    Ödendi
+                                  </button>
+                                  <button
+                                    className="btn btn-sm btn-outline-danger"
+                                    onClick={()=>setDemirbas(selected,false)}
+                                    disabled={!isAdmin || st==="odenmedi"}
+                                  >
+                                    Ödenmedi
+                                  </button>
                                 </>
                               );
                             })()}
@@ -645,8 +675,20 @@ export default function App(){
                           <th>Başlayan Yaşam (Süzme Sayaç)</th>
                           <td className="d-flex align-items-center gap-2 flex-wrap">
                             <span>{selected.suzme_sayac ? (normSuzmeTakildi(selected.suzme_sayac)?"Takıldı":"Takılmadı") : "-"}</span>
-                            <button className="btn btn-sm btn-outline-success" onClick={()=>setSuzme(selected,true)} disabled={normSuzmeTakildi(selected.suzme_sayac)}>Takıldı</button>
-                            <button className="btn btn-sm btn-outline-danger" onClick={()=>setSuzme(selected,false)} disabled={!normSuzmeTakildi(selected.suzme_sayac)}>Takılmadı</button>
+                            <button
+                              className="btn btn-sm btn-outline-success"
+                              onClick={()=>setSuzme(selected,true)}
+                              disabled={!isAdmin || normSuzmeTakildi(selected.suzme_sayac)}
+                            >
+                              Takıldı
+                            </button>
+                            <button
+                              className="btn btn-sm btn-outline-danger"
+                              onClick={()=>setSuzme(selected,false)}
+                              disabled={!isAdmin || !normSuzmeTakildi(selected.suzme_sayac)}
+                            >
+                              Takılmadı
+                            </button>
                           </td>
                         </tr>
                         <tr>
