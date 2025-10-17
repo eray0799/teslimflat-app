@@ -144,7 +144,7 @@ function DonutChart({ title, delivered=0, remaining=0, stock=0, baslayanYasam=0,
 }
 
 /** ========== Normalizasyonlar & yardımcılar ========== */
-const isSold = (r)=>Boolean((r.musteri && String(r.musteri).trim()) || r.satis_tarihi);
+const isSold = (r) => (r.durum || "").toLowerCase().includes("sat");
 const isDelivered = (r)=> String(r.teslim_durumu||"").toLowerCase().includes("teslim edildi");
 const isRejected = (r)=> String(r.teslim_durumu||"").toLowerCase().includes("teslim reddedildi");
 const statusEq = (r, text)=> ((r?.teslim_durumu || "").toLowerCase() === text.toLowerCase());
