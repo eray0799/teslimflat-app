@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import "bootstrap/dist/css/bootstrap.min.css";
+import { createClient } from "@supabase/supabase-js"; 
 
 /** ========== Basit Admin Girişi ========== */
 const ADMIN_CODE = "rgelal";
@@ -16,6 +17,36 @@ const REST_HEADERS = {
   "Content-Type": "application/json",
   Prefer: "return=representation",
 };
+
+/** ========== Supabase Client (Storage için EKLENDİ) ========== */
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY); 
+
+/** ========== YENİ YARDIMCI FONKSİYON (Bucket Adı Önemli) ========== */
+// Supabase URL'inden dosya yolunu (path) çıkaran yardımcı fonksiyon
+function getPathFromUrl(url) {
+  if (!url) return null;
+  try {
+    const urlObj = new URL(url);
+    const pathname = urlObj.pathname; // /storage/v1/object/public/Evrak%20-%20Tapu/public/A2/form.pdf
+    
+    // Bucket adını (URL'de kodlanmış halini) bul
+    const bucketNameEncoded = "Evrak%20-%20Tapu"; // Sizin bucket adınızın kodlanmış hali
+    const bucketIndex = pathname.indexOf(bucketNameEncoded);
+    
+    if (bucketIndex === -1) {
+      console.error("Bucket adı URL'de bulunamadı.");
+      return null; 
+    }
+    
+    // Bucket adından sonraki yolu al (başındaki / işaretini kaldır)
+    const pathWithSlash = pathname.substring(bucketIndex + bucketNameEncoded.length); // /public/A2/form.pdf
+    return decodeURIComponent(pathWithSlash.substring(1)); // public/A2/form.pdf
+    
+  } catch (e) {
+    console.error("URL parse hatası", e);
+    return null;
+  }
+}
 
 /** ========== Tema / Layout ========== */
 function useTheme() {
@@ -166,7 +197,8 @@ const SCHEMA_TYPES = {
   demirbas:"numeric", aidat:"numeric",
   demirbas_odeme_durumu:"text",
   kdv_muafiyeti:"text", ipotek_durumu:"text", tapu_durumu:"text",
-  suzme_sayac:"text"
+  suzme_sayac:"text",
+  teslim_formu_url:"text" // ADIM 3: Eklendi (Teknik olarak schema'ya eklemek gerekmez ama tutarlılık için)
 };
 const ALLOW_EDIT_FIELDS = new Set(["teslim_randevu_tarihi","teslim_randevu_saati","teslim_durumu","teslim_notu","demirbas_odeme_durumu"]);
 
@@ -208,6 +240,11 @@ export default function App(){
   const [showAllList,setShowAllList]=useState(false);
   const [edit,setEdit]=useState({});
   const [notice,setNotice]=useState("");
+
+  // EKLENEN STATE'LER
+  const [uploadFile, setUploadFile] = useState(null);
+  const [isUploading, setIsUploading] = useState(false);
+
   const pkRef=useMemo(()=>selected?selected.daire:null,[selected]);
 
   /** Takvim: tek mod (day|week) */
@@ -324,11 +361,14 @@ export default function App(){
   /** ---- Admin ---- */
   function handleLogin(){
     if(isAdmin){ setIsAdmin(false); window.localStorage.removeItem("tp_admin"); return; }
-    const code=window.prompt("Giriş kodu:");
+    const code=window.prompt("Girişi kodu:");
     if(code===ADMIN_CODE){ setIsAdmin(true); window.localStorage.setItem("tp_admin","1"); }
     else if(code!==null){ alert("Kod hatalı."); }
   }
-  useEffect(()=>{ setEdit(selected?{...selected}:{}); },[selected]);
+  useEffect(()=>{
+    setEdit(selected?{...selected}:{});
+    setUploadFile(null); // Daire değiştiğinde dosya seçimini temizle
+  },[selected]);
   function onEditChange(field,value){ setEdit(p=>({...p,[field]:value})); }
   function isLocked(field){ if(field==="created_at") return true; if(!isAdmin) return true; return !ALLOW_EDIT_FIELDS.has(field); }
   async function handleSave(){
@@ -348,6 +388,79 @@ export default function App(){
       setTimeout(()=>setNotice(""), 2000);
     }catch(e){
       alert("Kaydetme başarısız: "+e.message);
+    }
+  }
+
+  /** ---- Dosya Yükleme (GÜNCELLENDİ) ---- */
+  async function handleUpload() {
+    if (!uploadFile || !selected) {
+      alert("Lütfen önce bir dosya seçin.");
+      return;
+    }
+    if (!isAdmin) {
+      return; // Sessizce çık
+    }
+
+    setIsUploading(true);
+    setNotice("");
+
+    try {
+      // 1. ESKİ dosya yolunu (eğer varsa) URL'den al
+      const oldPath = getPathFromUrl(selected.teslim_formu_url);
+
+      // 2. YENİ dosya yolunu oluştur (SABİT İSİM, Date.now() KALDIRILDI)
+      const fileExt = uploadFile.name.split('.').pop();
+      const newPath = `public/${selected.daire}/teslim_formu.${fileExt}`;
+
+      // 3. Dosyayı Supabase Storage'a yükle (UPSERT: TRUE eklendi)
+      // Bu, 'newPath' ile aynı yolda bir dosya varsa üzerine yazar.
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from('Evrak - Tapu')
+        .upload(newPath, uploadFile, {
+          cacheControl: '3600',
+          upsert: true // ÖNEMLİ: Üzerine yazmayı etkinleştirir
+        });
+
+      if (uploadError) {
+        throw uploadError;
+      }
+
+      // 4. Yüklenen YENİ dosyanın public URL'ini al
+      const { data: publicUrlData } = supabase.storage
+        .from('Evrak - Tapu')
+        .getPublicUrl(newPath); // newPath'in URL'ini al
+      
+      const fileUrl = publicUrlData.publicUrl;
+
+      // 5. Bu YENİ URL'i veritabanına kaydet
+      await patchByDaire(selected.daire, {
+        teslim_formu_url: fileUrl
+      });
+      
+      // 6. YETİM DOSYA KONTROLÜ:
+      // Eğer eski dosya yolu (oldPath) varsa VE yeni yoldan farklıysa
+      // (örn: .jpg'yi .pdf ile değiştirdiysek), eski dosyayı sil.
+      if (oldPath && oldPath !== newPath) {
+        console.log(`Yetim dosya siliniyor: ${oldPath}`);
+        // Hata verse bile ana işlemi durdurmasın diye try/catch içine alabiliriz
+        try {
+          await supabase.storage.from('Evrak - Tapu').remove([oldPath]);
+        } catch (removeError) {
+          console.error("Eski dosya silinirken hata oluştu:", removeError.message);
+        }
+      }
+
+      // 7. Verileri ve arayüzü yenile
+      await fetchAll(); // Veritabanından son halini çek
+      setNotice("Dosya başarıyla yüklendi!");
+      setUploadFile(null); // Dosya seçimini temizle
+      
+    } catch (e) {
+      console.error("Yükleme hatası:", e);
+      alert("Dosya yüklenirken bir hata oluştu: " + e.message);
+    } finally {
+      setIsUploading(false);
+      setTimeout(()=>setNotice(""), 3000); // Bildirimi 3 sn sonra kaldır
     }
   }
 
@@ -636,6 +749,51 @@ export default function App(){
                                    onChange={(e)=>onEditChange("teslim_notu", e.target.value)} disabled={isLocked("teslim_notu")} />
                           </td>
                         </tr>
+
+                        {/* ========== BAŞLANGIÇ: YENİ EKLENEN FOTOĞRAF YÜKLEME BÖLÜMÜ ========== */}
+                        
+                        {/* Yüklenmiş Formu Gösterme Satırı */}
+                        {selected.teslim_formu_url && (
+                          <tr>
+                            <th>Teslim Formu</th>
+                            <td>
+                              <a href={selected.teslim_formu_url} target="_blank" rel="noopener noreferrer" className="btn btn-sm btn-outline-info">
+                                Formu Görüntüle
+                              </a>
+                            </td>
+                          </tr>
+                        )}
+
+                        {/* Dosya Yükleme Satırı (Sadece Admin görebilir) */}
+                        {isAdmin && (
+                          <tr>
+                            <th>
+                              {selected.teslim_formu_url ? "Formu Değiştir" : "Teslim Formu Yükle"}
+                            </th>
+                            <td>
+                              <div className="d-flex gap-2">
+                                <input 
+                                  key={selected.daire || 'file-input'} // Daire değişince input'u resetle
+                                  className="form-control form-control-sm" 
+                                  type="file" 
+                                  accept="image/*,application/pdf"
+                                  onChange={(e) => setUploadFile(e.target.files[0])}
+                                  disabled={isUploading}
+                                />
+                                <button 
+                                  className="btn btn-sm btn-success" 
+                                  onClick={handleUpload} 
+                                  disabled={isUploading || !uploadFile}
+                                >
+                                  {isUploading ? "Yükleniyor..." : "Yükle"}
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        
+                        {/* ========== BİTİŞ: YENİ EKLENEN FOTOĞRAF YÜKLEME BÖLÜMÜ ========== */}
+
                         <tr>
                           <th>Demirbaş</th>
                           <td>{readOnlyCell("numeric", selected.demirbas)}</td>
@@ -649,7 +807,9 @@ export default function App(){
                           <td className="d-flex align-items-center gap-2 flex-wrap">
                             <span>{selected.demirbas_odeme_durumu ?? "-"}</span>
                             {(() => {
-                              const st = demirbasState(selected.demirbas_odeme_durumu);
+                              // ******** HATA BURADA DÜZELTİLDİ ********
+                              const st = demirbasState(selected.demirbas_odeme_durumu); // 'r' yerine 'selected' kullanıldı
+                              // ******** HATA BURADA DÜZELTİLDİ ********
                               return (
                                 <>
                                   <button
